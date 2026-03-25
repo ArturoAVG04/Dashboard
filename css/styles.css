@@ -37,6 +37,7 @@ body {
     background-color: var(--bg-main);
     color: var(--text-main);
     min-height: 100vh;
+    overflow-x: hidden;
 }
 
 /* Layout */
@@ -44,6 +45,7 @@ body {
     display: flex;
     min-height: 100vh;
     overflow: hidden;
+    width: 100%;
 }
 
 /* Sidebar */
@@ -139,6 +141,7 @@ body {
 /* Main Content Area */
 .main-content {
     flex-grow: 1;
+    min-width: 0;
     overflow-y: auto;
     padding: 2rem 3rem;
     display: flex;
@@ -151,6 +154,8 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
+    gap: 1.5rem;
+    flex-wrap: wrap;
 }
 
 h1 {
@@ -165,10 +170,12 @@ h1 {
 
 .time-filters {
     display: flex;
+    flex-wrap: wrap;
     background-color: var(--bg-surface);
     padding: 0.25rem;
     border-radius: var(--radius-md);
     border: 1px solid var(--border-color);
+    max-width: 100%;
 }
 
 .filter-btn {
@@ -288,6 +295,7 @@ h1 {
     padding: 1.5rem;
     display: flex;
     flex-direction: column;
+    min-width: 0;
 }
 
 .chart-card h3 {
@@ -330,6 +338,7 @@ h1 {
     border: 1px solid var(--border-color);
     overflow: hidden;
     overflow-x: auto;
+    max-width: 100%;
 }
 
 .transactions-table {
@@ -828,6 +837,141 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .btn-icon:hover { color: var(--text-main); }
 .btn-icon.delete:hover { color: var(--danger); }
+
+/* Export Summary */
+.export-summary-canvas {
+    position: fixed;
+    left: -10000px;
+    top: 0;
+    width: 1200px;
+    padding: 32px;
+    background: #f8fafc;
+    color: #0f172a;
+    font-family: 'Inter', -apple-system, sans-serif;
+}
+
+.export-summary-sheet {
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    border: 1px solid #cbd5e1;
+    border-radius: 24px;
+    padding: 32px;
+    box-shadow: 0 25px 80px rgba(15, 23, 42, 0.12);
+}
+
+.export-summary-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    align-items: flex-start;
+    margin-bottom: 24px;
+}
+
+.export-summary-header h2 {
+    font-size: 32px;
+    margin: 6px 0;
+}
+
+.export-summary-header p,
+.export-stamp span {
+    color: #475569;
+}
+
+.export-kicker {
+    display: inline-flex;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: #dbeafe;
+    color: #1d4ed8;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.export-stamp {
+    min-width: 160px;
+    padding: 16px 18px;
+    border-radius: 18px;
+    background: #e2e8f0;
+    text-align: right;
+}
+
+.export-stamp strong {
+    display: block;
+    font-size: 18px;
+    margin-top: 4px;
+}
+
+.export-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.export-stat {
+    padding: 20px;
+    border-radius: 20px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+}
+
+.export-stat span {
+    display: block;
+    color: #475569;
+    margin-bottom: 10px;
+    font-size: 14px;
+}
+
+.export-stat strong {
+    font-size: 28px;
+    color: #0f172a;
+}
+
+.export-stat.income { background: #ecfdf5; }
+.export-stat.expense { background: #fef2f2; }
+.export-stat.profit { background: #eff6ff; }
+
+.export-columns {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 20px;
+}
+
+.export-panel {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    padding: 20px;
+}
+
+.export-panel h3 {
+    margin-bottom: 14px;
+    font-size: 20px;
+}
+
+.export-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.export-table th,
+.export-table td {
+    padding: 12px 10px;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: top;
+}
+
+.export-table th {
+    color: #475569;
+    text-align: left;
+    background: #f8fafc;
+}
+
+.export-table tr:last-child td {
+    border-bottom: none;
+}
 
 /* Login Screen */
 #login-screen {

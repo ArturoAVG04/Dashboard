@@ -1,34 +1,21 @@
 import { db } from './firebase-config.js';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, limit } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
-
-// Basic Options for Default First Load
-const INITIAL_ZONES = ["Universidad", "La Presa", "Noria Alta"];
-const INITIAL_PRODUCTS = [
-    { id: 'h_esp', name: 'Hamburguesa Especial', category: 'Hamburguesas', price: 70 },
-    { id: 'h_pol', name: 'Hamburguesa de Pollo', category: 'Hamburguesas', price: 70 },
-    { id: 'h_sup', name: 'Hamburguesas Supers (Hawaiana, Champi, Cheese Bacon)', category: 'Hamburguesas', price: 99 },
-    { id: 'h_pap', name: 'Hamburguesa con papas', category: 'Hamburguesas', price: 80 },
-    { id: 's_pap', name: 'Papas a la francesa', category: 'Snacks', price: 50 },
-    { id: 's_ali', name: 'Alitas', category: 'Snacks', price: 100 },
-    { id: 's_alig', name: 'Alitas grandes', category: 'Snacks', price: 150 },
-    { id: 's_bon', name: 'Boneless', category: 'Snacks', price: 100 },
-    { id: 's_bong', name: 'Boneless grandes', category: 'Snacks', price: 150 },
-    { id: 'o_bur', name: 'Burritos', category: 'Otros', price: 25 },
-    { id: 'o_ref', name: 'Refresco', category: 'Otros', price: 30 },
-    { id: 'o_com', name: 'Combo estudiante', category: 'Otros', price: 90 },
-];
-const INITIAL_EXPENSE_TAGS = ["Pan", "Carne", "Servilletas", "Refrescos", "Verdura", "Gas", "Desechables", "Limpieza"];
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { INITIAL_ZONES, INITIAL_PRODUCTS, INITIAL_EXPENSE_TAGS } from './constants.js';
+import { STORAGE_KEYS, loadLocalState, saveLocalState } from './storage.js';
+import { authenticate, isAuthenticated } from './auth.js';
+import { groupProductsByCategory, upsertProduct, moveProductInList, removeProductById } from './product-utils.js';
 
 // State
-let transactions = JSON.parse(localStorage.getItem('localTransactions')) || [];
+let transactions = loadLocalState(STORAGE_KEYS.transactions, []);
 let currentFilter = 'day'; // Match UI default
 let charts = { main: null, category: null };
-let customProducts = JSON.parse(localStorage.getItem('customProducts')) || INITIAL_PRODUCTS;
-let customExpenseTags = JSON.parse(localStorage.getItem('customExpenseTags')) || INITIAL_EXPENSE_TAGS;
+let customProducts = loadLocalState(STORAGE_KEYS.products, INITIAL_PRODUCTS);
+let customExpenseTags = loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS);
 
 let customStartDate = null;
 let customEndDate = null;
 let customDateLabel = "";
+let editingProductId = null;
 
 // DOM Elements
 const views = {
@@ -83,22 +70,28 @@ const newExpenseForm = document.getElementById('new-expense-form');
 const btnSaveNewProduct = document.getElementById('save-new-product');
 const btnSaveNewExpense = document.getElementById('save-new-expense');
 const expenseTagsContainer = document.getElementById('expense-tags-container');
+const manageForm = document.getElementById('manage-new-product-form');
+const manageNameInput = document.getElementById('manage-prod-name');
+const managePriceInput = document.getElementById('manage-prod-price');
+const manageCategoryInput = document.getElementById('manage-prod-cat');
+const btnManageSaveProd = document.getElementById('manage-save-product');
+const manageProductsList = document.getElementById('manage-products-list');
 
 // Init App
 function init() {
-    if(document.getElementById('flatpickr-range')) {
+    if (document.getElementById('flatpickr-range')) {
         flatpickr("#flatpickr-range", {
             mode: "range",
             locale: "es",
             dateFormat: "d M Y",
-            onChange: function(selectedDates) {
-                if(selectedDates.length === 2) {
+            onChange: function (selectedDates) {
+                if (selectedDates.length === 2) {
                     customStartDate = selectedDates[0];
                     customEndDate = selectedDates[1];
                     currentFilter = 'custom';
                     document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
                     updateDashboard();
-                    if(views.transactions.classList.contains('active-view')) renderFullHistory();
+                    if (views.transactions.classList.contains('active-view')) renderFullHistory();
                 }
             }
         });
@@ -112,7 +105,7 @@ function init() {
     renderExpenseTags();
 
     // Auth Check
-    if (sessionStorage.getItem('authenticated') === 'true') {
+    if (isAuthenticated()) {
         unlockApp();
     }
 }
@@ -161,17 +154,12 @@ function showToast(message) {
 function setupEventListeners() {
     // Login
     if (loginForm) {
-        loginForm.addEventListener('submit', (e) => {
+        loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const pw = loginPassword.value;
-            
-            // Se usa una técnica de ofuscación (Base64 invertido) para que 
-            // no se pueda leer la clave original simplemente inspeccionando la página.
-            const secret = btoa(pw).split('').reverse().join('');
-            
-            // '=E2clV3ZyVnYtFGa' = hamburguesa
-            if(secret === '=E2clV3ZyVnYtFGa') { 
-                sessionStorage.setItem('authenticated', 'true');
+
+            if (await authenticate(pw)) {
+                loginError.style.display = 'none';
                 unlockApp();
             } else {
                 loginError.style.display = 'block';
@@ -227,14 +215,12 @@ function setupEventListeners() {
         const price = parseFloat(document.getElementById('new-prod-price').value);
         const cat = document.getElementById('new-prod-cat').value;
         if (name && !isNaN(price)) {
-            const newProd = { id: 'p_' + Date.now(), name, price, category: cat };
-            customProducts.push(newProd);
-            localStorage.setItem('customProducts', JSON.stringify(customProducts));
+            customProducts = upsertProduct(customProducts, { name, price, category: cat });
 
             document.getElementById('new-prod-name').value = '';
             document.getElementById('new-prod-price').value = '';
             newProductForm.style.display = 'none';
-            renderProductsList();
+            saveProductsState();
             showToast("Producto agregado a tu lista");
         }
     });
@@ -244,7 +230,7 @@ function setupEventListeners() {
         const name = document.getElementById('new-exp-name').value.trim();
         if (name) {
             customExpenseTags.push(name);
-            localStorage.setItem('customExpenseTags', JSON.stringify(customExpenseTags));
+            saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
 
             document.getElementById('new-exp-name').value = '';
             newExpenseForm.style.display = 'none';
@@ -255,30 +241,36 @@ function setupEventListeners() {
 
     // Manage Products view specific events
     const btnAddProductManage = document.getElementById('btn-add-product-manage');
-    const manageForm = document.getElementById('manage-new-product-form');
     if (btnAddProductManage) {
         btnAddProductManage.addEventListener('click', () => {
+            if (editingProductId) resetManageProductForm();
             manageForm.style.display = manageForm.style.display === 'none' ? 'block' : 'none';
         });
     }
 
-    const btnManageSaveProd = document.getElementById('manage-save-product');
     if (btnManageSaveProd) {
         btnManageSaveProd.addEventListener('click', () => {
-            const name = document.getElementById('manage-prod-name').value.trim();
-            const price = parseFloat(document.getElementById('manage-prod-price').value);
-            const cat = document.getElementById('manage-prod-cat').value;
-            if (name && !isNaN(price)) {
-                const newProd = { id: 'p_' + Date.now(), name, price, category: cat };
-                customProducts.push(newProd);
-                localStorage.setItem('customProducts', JSON.stringify(customProducts));
+            saveManagedProduct();
+        });
+    }
 
-                document.getElementById('manage-prod-name').value = '';
-                document.getElementById('manage-prod-price').value = '';
-                manageForm.style.display = 'none';
-                renderManageProducts();
-                renderProductsList();
-                showToast("Producto guardado");
+    if (manageProductsList) {
+        manageProductsList.addEventListener('click', (event) => {
+            const actionButton = event.target.closest('[data-action]');
+            if (!actionButton) return;
+
+            const { action, id, index, dir } = actionButton.dataset;
+
+            if (action === 'move') {
+                moveManagedProduct(Number(index), Number(dir));
+            }
+
+            if (action === 'edit') {
+                startEditingProduct(id);
+            }
+
+            if (action === 'delete') {
+                deleteManagedProduct(id);
             }
         });
     }
@@ -329,12 +321,7 @@ function initFormZones() {
 
 function renderProductsList() {
     productsContainer.innerHTML = '';
-
-    const grouped = customProducts.reduce((acc, p) => {
-        if (!acc[p.category]) acc[p.category] = [];
-        acc[p.category].push(p);
-        return acc;
-    }, {});
+    const grouped = groupProductsByCategory(customProducts);
 
     Object.keys(grouped).forEach(cat => {
         const groupDiv = document.createElement('div');
@@ -378,11 +365,10 @@ function renderProductsList() {
 }
 
 function renderManageProducts() {
-    const container = document.getElementById('manage-products-list');
-    container.innerHTML = '';
+    manageProductsList.innerHTML = '';
 
     // Make sure it looks like a grid
-    container.className = 'view-products-grid';
+    manageProductsList.className = 'view-products-grid';
 
     customProducts.forEach((p, index) => {
         const div = document.createElement('div');
@@ -390,49 +376,99 @@ function renderManageProducts() {
         div.innerHTML = `
             <div style="display:flex; align-items:center; gap:0.5rem;">
                 <div style="display:flex; flex-direction:column; gap:0.25rem;">
-                    <button class="btn-icon" onclick="moveProduct(${index}, -1)" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
-                    <button class="btn-icon" onclick="moveProduct(${index}, 1)" ${index === customProducts.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
+                    <button class="btn-icon" data-action="move" data-index="${index}" data-dir="-1" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
+                    <button class="btn-icon" data-action="move" data-index="${index}" data-dir="1" ${index === customProducts.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
                 </div>
                 <div>
                     <div style="font-weight: 500;">${p.name} <small style="color:var(--text-muted)">(${p.category})</small></div>
                     <div style="color: var(--success); font-size: 0.9rem;">$${p.price}</div>
                 </div>
             </div>
-            <button class="btn-icon delete" onclick="deleteProduct('${p.id}')"><i class="ph ph-trash"></i></button>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+                <button class="btn-icon" data-action="edit" data-id="${p.id}"><i class="ph ph-pencil-simple"></i></button>
+                <button class="btn-icon delete" data-action="delete" data-id="${p.id}"><i class="ph ph-trash"></i></button>
+            </div>
         `;
-        container.appendChild(div);
+        manageProductsList.appendChild(div);
     });
 }
 
-window.moveProduct = (index, dir) => {
-    const newIndex = index + dir;
-    if (newIndex < 0 || newIndex >= customProducts.length) return;
-    const temp = customProducts[index];
-    customProducts[index] = customProducts[newIndex];
-    customProducts[newIndex] = temp;
-    localStorage.setItem('customProducts', JSON.stringify(customProducts));
+function saveProductsState() {
+    saveLocalState(STORAGE_KEYS.products, customProducts);
     renderManageProducts();
     renderProductsList();
-};
+}
 
-window.deleteProduct = (id) => {
-    if (confirm("¿Estás seguro de que quieres eliminar este producto?")) {
-        customProducts = customProducts.filter(p => p.id !== id);
-        localStorage.setItem('customProducts', JSON.stringify(customProducts));
-        renderManageProducts();
-        renderProductsList();
+function resetManageProductForm() {
+    editingProductId = null;
+    manageNameInput.value = '';
+    managePriceInput.value = '';
+    manageCategoryInput.value = 'Hamburguesas';
+    btnManageSaveProd.textContent = 'Guardar';
+}
+
+function saveManagedProduct() {
+    const name = manageNameInput.value.trim();
+    const price = parseFloat(managePriceInput.value);
+    const category = manageCategoryInput.value;
+
+    if (!name || isNaN(price)) return;
+
+    if (editingProductId) {
+        customProducts = upsertProduct(customProducts, { name, price, category }, editingProductId);
+        showToast("Producto actualizado");
+    } else {
+        customProducts = upsertProduct(customProducts, { name, price, category });
+        showToast("Producto guardado");
     }
-};
+
+    saveProductsState();
+    resetManageProductForm();
+    manageForm.style.display = 'none';
+}
+
+function moveManagedProduct(index, dir) {
+    customProducts = moveProductInList(customProducts, index, dir);
+    saveProductsState();
+}
+
+function startEditingProduct(id) {
+    const product = customProducts.find(p => p.id === id);
+    if (!product) return;
+
+    editingProductId = id;
+    manageNameInput.value = product.name;
+    managePriceInput.value = product.price;
+    manageCategoryInput.value = product.category;
+    btnManageSaveProd.textContent = 'Actualizar';
+    manageForm.style.display = 'block';
+    manageNameInput.focus();
+}
+
+function deleteManagedProduct(id) {
+    if (confirm("¿Estás seguro de que quieres eliminar este producto?")) {
+        customProducts = removeProductById(customProducts, id);
+        if (editingProductId === id) {
+            resetManageProductForm();
+            manageForm.style.display = 'none';
+        }
+        saveProductsState();
+    }
+}
 
 function downloadImageSummary() {
-    switchView('dashboard');
+    const data = getFilteredData();
+    const summaryNode = buildExportSummary(data);
     showToast("Generando captura... por favor espera");
     setTimeout(async () => {
         try {
-            const canvas = await html2canvas(document.getElementById('view-dashboard'), {
-                backgroundColor: '#0f172a',
-                scale: 2
+            document.body.appendChild(summaryNode);
+            const canvas = await html2canvas(summaryNode, {
+                backgroundColor: '#f8fafc',
+                scale: 2,
+                useCORS: true
             });
+            summaryNode.remove();
             const link = document.createElement('a');
             const dStr = new Date().toISOString().slice(0, 10);
             link.download = `Resumen_Barra_${currentFilter}_${dStr}.png`;
@@ -440,10 +476,136 @@ function downloadImageSummary() {
             link.click();
             showToast("Resumen visual descargado");
         } catch (e) {
+            summaryNode.remove();
             console.error(e);
             showToast("Error al generar la imagen");
         }
     }, 600);
+}
+
+function getFilterLabel() {
+    const labels = {
+        day: 'Hoy',
+        week: 'Ultimos 7 dias',
+        month: 'Este mes',
+        year: 'Este ano',
+        all: 'Todo el historial',
+        custom: customDateLabel || 'Fechas personalizadas'
+    };
+
+    return labels[currentFilter] || 'Resumen';
+}
+
+function formatExportDate(dateValue) {
+    if (!dateValue) return 'Sin fecha';
+
+    const date = new Date(dateValue);
+    if (isNaN(date.getTime())) return 'Sin fecha';
+
+    return date.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function buildExportSummary(data) {
+    let ingresos = 0;
+    let gastos = 0;
+
+    data.forEach(item => {
+        if (item.type === 'income') ingresos += item.amount;
+        else gastos += item.amount;
+    });
+
+    const recentRows = [...data]
+        .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
+        .slice(0, 6)
+        .map(item => `
+            <tr>
+                <td>${formatExportDate(item.date)}</td>
+                <td>${item.type === 'income' ? 'Ingreso' : 'Gasto'}</td>
+                <td>${item.desc || 'Sin descripcion'}</td>
+                <td style="text-align:right; color:${item.type === 'income' ? '#047857' : '#b91c1c'}; font-weight:700;">
+                    ${item.type === 'income' ? '+' : '-'}${formatMoney(item.amount)}
+                </td>
+            </tr>
+        `)
+        .join('');
+
+    const topSellerRows = getTopSellerStats(data)
+        .slice(0, 6)
+        .map(([, stats]) => `
+            <tr>
+                <td>${stats.label}</td>
+                <td style="text-align:right;">${stats.qty}</td>
+                <td style="text-align:right; font-weight:700;">${formatMoney(stats.total)}</td>
+            </tr>
+        `)
+        .join('');
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'export-summary-canvas';
+    wrapper.innerHTML = `
+        <div class="export-summary-sheet">
+            <div class="export-summary-header">
+                <div>
+                    <div class="export-kicker">La Barra</div>
+                    <h2>Resumen del negocio</h2>
+                    <p>${getFilterLabel()}</p>
+                </div>
+                <div class="export-stamp">
+                    <span>Generado</span>
+                    <strong>${new Date().toLocaleDateString('es-MX')}</strong>
+                </div>
+            </div>
+            <div class="export-summary-grid">
+                <div class="export-stat income">
+                    <span>Ventas</span>
+                    <strong>${formatMoney(ingresos)}</strong>
+                </div>
+                <div class="export-stat expense">
+                    <span>Gastos</span>
+                    <strong>${formatMoney(gastos)}</strong>
+                </div>
+                <div class="export-stat profit">
+                    <span>Ganancia neta</span>
+                    <strong>${formatMoney(ingresos - gastos)}</strong>
+                </div>
+            </div>
+            <div class="export-columns">
+                <section class="export-panel">
+                    <h3>Movimientos recientes</h3>
+                    <table class="export-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Tipo</th>
+                                <th>Descripcion</th>
+                                <th style="text-align:right;">Monto</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${recentRows || '<tr><td colspan="4" style="text-align:center; color:#64748b;">Sin movimientos en este periodo</td></tr>'}
+                        </tbody>
+                    </table>
+                </section>
+                <section class="export-panel">
+                    <h3>Productos vendidos</h3>
+                    <table class="export-table">
+                        <thead>
+                            <tr>
+                                <th>Producto</th>
+                                <th style="text-align:right;">Cantidad</th>
+                                <th style="text-align:right;">Total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${topSellerRows || '<tr><td colspan="3" style="text-align:center; color:#64748b;">Sin productos vendidos</td></tr>'}
+                        </tbody>
+                    </table>
+                </section>
+            </div>
+        </div>
+    `;
+
+    return wrapper;
 }
 
 function downloadCSV() {
@@ -584,7 +746,7 @@ async function handleFormSubmit(e) {
         showToast("Guardado localmente. Revisar Firebase.");
         newTx.id = "temp_" + Date.now();
         transactions.push(newTx);
-        localStorage.setItem('localTransactions', JSON.stringify(transactions));
+        saveLocalState(STORAGE_KEYS.transactions, transactions);
         updateDashboard();
         renderFullHistory();
         closeModal();
@@ -593,7 +755,7 @@ async function handleFormSubmit(e) {
 
 function fetchTransactions() {
     if (!db) return;
-    const q = query(collection(db, "transactions"), orderBy("date", "desc"), limit(150));
+    const q = query(collection(db, "transactions"), orderBy("date", "desc"));
 
     onSnapshot(q, (snapshot) => {
         if (!snapshot.empty) {
@@ -601,7 +763,7 @@ function fetchTransactions() {
             snapshot.forEach((doc) => {
                 transactions.push({ id: doc.id, ...doc.data() });
             });
-            localStorage.setItem('localTransactions', JSON.stringify(transactions));
+            saveLocalState(STORAGE_KEYS.transactions, transactions);
             updateDashboard();
             if (views.transactions.classList.contains('active-view')) renderFullHistory();
         }
@@ -615,7 +777,7 @@ window.deleteTransaction = async (id) => {
         try {
             if (id.startsWith('temp_')) {
                 transactions = transactions.filter(t => t.id !== id);
-                localStorage.setItem('localTransactions', JSON.stringify(transactions));
+                saveLocalState(STORAGE_KEYS.transactions, transactions);
                 updateDashboard();
                 renderFullHistory();
             } else {
@@ -640,7 +802,7 @@ function getFilteredData() {
             if (currentFilter === 'all') return true;
 
             if (currentFilter === 'custom') {
-                if(!customStartDate || !customEndDate) return true; // If custom is selected but dates aren't set, show all.
+                if (!customStartDate || !customEndDate) return true; // If custom is selected but dates aren't set, show all.
 
                 // Make inclusive boundary spanning entire visual days
                 const startDate = new Date(customStartDate.getFullYear(), customStartDate.getMonth(), customStartDate.getDate());
@@ -699,52 +861,129 @@ function updateDashboard() {
     renderTopSellers(data);
 }
 
-function renderTopSellers(data) {
+function getItemsForTransaction(transaction) {
+    if (Array.isArray(transaction.itemsSoldArray) && transaction.itemsSoldArray.length > 0) {
+        return transaction.itemsSoldArray.map(item => ({
+            name: item.name,
+            qty: Number(item.qty) || 0,
+            total: Number(item.total) || ((Number(item.price) || 0) * (Number(item.qty) || 0))
+        }));
+    }
+
+    if (!transaction.desc || transaction.desc === 'Venta General') return [];
+
+    const normalizedDesc = transaction.desc
+        .replace(/\s+[xX]\s+/g, 'x ')
+        .replace(/[•|]/g, ',')
+        .trim();
+    const parts = normalizedDesc.split(/\s*,\s*/).filter(Boolean);
+    const parsedItems = parts
+        .map(part => {
+            const match = part.match(/^(\d+)\s*x\s+(.+)$/i);
+            if (!match) return null;
+            return {
+                qty: parseInt(match[1], 10),
+                name: match[2].trim()
+            };
+        })
+        .filter(Boolean);
+
+    if (parsedItems.length === 0) return [];
+
+    const totalQty = parsedItems.reduce((sum, item) => sum + item.qty, 0) || 1;
+
+    return parsedItems.map(item => {
+        const product = customProducts.find(prod => prod.name === item.name);
+        const fallbackUnitPrice = product ? product.price : (transaction.amount / totalQty);
+
+        return {
+            ...item,
+            total: fallbackUnitPrice * item.qty
+        };
+    });
+}
+
+function normalizeText(value) {
+    return (value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function toTitleCase(value) {
+    return value
+        .split(' ')
+        .filter(Boolean)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+}
+
+function getAggregationMeta(productName) {
+    const originalName = (productName || '').trim();
+    const normalizedName = normalizeText(originalName);
+
+    const compactComboMatch = normalizedName.match(/^(\d+)\s*x\s*\$?\s*(\d+(?:\.\d+)?)\s+(.+)$/i);
+    if (compactComboMatch) {
+        const [, qty, price, rawProduct] = compactComboMatch;
+        const product = normalizeText(rawProduct);
+        return {
+            key: `combo:${product}:${qty}:${price}`,
+            label: `${qty} ${toTitleCase(product)} por $${price}`
+        };
+    }
+
+    const naturalComboMatch = normalizedName.match(/^(\d+)\s+(.+?)\s+por\s+\$?\s*(\d+(?:\.\d+)?)$/i);
+    if (naturalComboMatch) {
+        const [, qty, rawProduct, price] = naturalComboMatch;
+        const product = normalizeText(rawProduct);
+        return {
+            key: `combo:${product}:${qty}:${price}`,
+            label: `${qty} ${toTitleCase(product)} por $${price}`
+        };
+    }
+
+    return {
+        key: `name:${normalizedName}`,
+        label: originalName
+    };
+}
+
+function getTopSellerStats(data) {
     const productStats = {};
 
     data.forEach(t => {
         if (t.type === 'income') {
-            let items = t.itemsSoldArray;
-            // Fallback para transacciones viejas
-            if (!items && t.desc && t.desc !== 'Venta General') {
-                items = [];
-                const parts = t.desc.split(', ');
-                const totalQty = parts.reduce((sum, p) => {
-                    const match = p.match(/^(\d+)x\s+(.+)$/);
-                    return sum + (match ? parseInt(match[1]) : 0);
-                }, 0);
-                parts.forEach(p => {
-                    const match = p.match(/^(\d+)x\s+(.+)$/);
-                    if (match) {
-                        const qty = parseInt(match[1]);
-                        const name = match[2];
-                        const product = customProducts.find(prod => prod.name === name);
-                        const fallbackPrice = product ? product.price : (totalQty > 0 ? t.amount / totalQty : 0);
-                        items.push({
-                            qty,
-                            name,
-                            total: fallbackPrice * qty
-                        });
-                    }
-                });
-            }
+            const items = getItemsForTransaction(t);
 
-            if (items) {
+            if (items.length > 0) {
                 items.forEach(item => {
-                    const name = item.name;
-                    if (!productStats[name]) productStats[name] = { qty: 0, total: 0 };
-                    productStats[name].qty += item.qty;
-                    productStats[name].total += (item.total || 0);
+                    const aggregation = getAggregationMeta(item.name);
+                    if (!productStats[aggregation.key]) {
+                        productStats[aggregation.key] = {
+                            label: aggregation.label,
+                            qty: 0,
+                            total: 0
+                        };
+                    }
+
+                    productStats[aggregation.key].qty += item.qty;
+                    productStats[aggregation.key].total += (item.total || 0);
                 });
             }
         }
     });
 
-    const sorted = Object.entries(productStats)
+    return Object.entries(productStats)
         .sort((a, b) => {
             if (b[1].qty !== a[1].qty) return b[1].qty - a[1].qty;
             return b[1].total - a[1].total;
         });
+}
+
+function renderTopSellers(data) {
+    const sorted = getTopSellerStats(data);
 
     topSellersTbody.innerHTML = '';
     if (sorted.length === 0) {
@@ -755,7 +994,7 @@ function renderTopSellers(data) {
     sorted.forEach(([name, stats]) => {
         topSellersTbody.innerHTML += `
             <tr>
-                <td style="font-weight: 500;">${name}</td>
+                <td style="font-weight: 500;">${stats.label || name}</td>
                 <td class="align-right">${stats.qty}</td>
                 <td class="align-right text-success">${formatMoney(stats.total)}</td>
             </tr>
@@ -797,6 +1036,7 @@ function createRow(t, showDelete = true) {
 }
 
 function renderFullHistory() {
+    renderTopSellers(transactions);
     historyTbody.innerHTML = '';
     if (transactions.length === 0) {
         historyTbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted)">Aún no hay transacciones</td></tr>`;
