@@ -1,5 +1,5 @@
 import { db } from './firebase-config.js';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 import { INITIAL_ZONES, INITIAL_PRODUCTS, INITIAL_EXPENSE_TAGS } from './constants.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from './storage.js';
 import { authenticate, isAuthenticated } from './auth.js';
@@ -10,12 +10,15 @@ let transactions = loadLocalState(STORAGE_KEYS.transactions, []);
 let currentFilter = 'day'; // Match UI default
 let charts = { main: null, category: null };
 let customProducts = loadLocalState(STORAGE_KEYS.products, INITIAL_PRODUCTS);
-let customExpenseTags = loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS);
+let customExpenseTags = normalizeExpenseTags(loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS));
 
 let customStartDate = null;
 let customEndDate = null;
 let customDateLabel = "";
 let editingProductId = null;
+let editingExpenseTagId = null;
+let isSyncingProducts = false;
+let isSyncingExpenseTags = false;
 
 // DOM Elements
 const views = {
@@ -76,6 +79,11 @@ const managePriceInput = document.getElementById('manage-prod-price');
 const manageCategoryInput = document.getElementById('manage-prod-cat');
 const btnManageSaveProd = document.getElementById('manage-save-product');
 const manageProductsList = document.getElementById('manage-products-list');
+const manageExpenseForm = document.getElementById('manage-new-expense-form');
+const manageExpenseNameInput = document.getElementById('manage-exp-name');
+const btnAddExpenseManage = document.getElementById('btn-add-expense-manage');
+const btnManageSaveExpense = document.getElementById('manage-save-expense');
+const manageExpenseTagsList = document.getElementById('manage-expense-tags-list');
 
 // Init App
 function init() {
@@ -103,6 +111,7 @@ function init() {
     initFormZones();
     renderProductsList();
     renderExpenseTags();
+    renderManageExpenseTags();
 
     // Auth Check
     if (isAuthenticated()) {
@@ -121,6 +130,120 @@ function unlockApp() {
     }
 
     fetchTransactions();
+    subscribeProducts();
+    subscribeExpenseTags();
+}
+
+async function syncProductsToCloud() {
+    if (!db || isSyncingProducts) return;
+
+    isSyncingProducts = true;
+    try {
+        const collectionRef = collection(db, "dashboard_products");
+        const existingSnapshot = await getDocs(collectionRef);
+        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
+        const nextIds = new Set(customProducts.map(item => item.id));
+        const batch = writeBatch(db);
+
+        customProducts.forEach((product, index) => {
+            const ref = doc(db, "dashboard_products", product.id);
+            batch.set(ref, {
+                name: product.name,
+                price: product.price,
+                category: product.category,
+                order: index
+            });
+        });
+
+        existingIds.forEach(id => {
+            if (!nextIds.has(id)) {
+                batch.delete(doc(db, "dashboard_products", id));
+            }
+        });
+
+        await batch.commit();
+    } catch (error) {
+        console.warn("No se pudieron sincronizar los productos:", error);
+    } finally {
+        isSyncingProducts = false;
+    }
+}
+
+async function syncExpenseTagsToCloud() {
+    if (!db || isSyncingExpenseTags) return;
+
+    isSyncingExpenseTags = true;
+    try {
+        const collectionRef = collection(db, "dashboard_expense_tags");
+        const existingSnapshot = await getDocs(collectionRef);
+        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
+        const nextIds = new Set(customExpenseTags.map(item => item.id));
+        const batch = writeBatch(db);
+
+        customExpenseTags.forEach((tag, index) => {
+            const ref = doc(db, "dashboard_expense_tags", tag.id);
+            batch.set(ref, {
+                name: tag.name,
+                order: index
+            });
+        });
+
+        existingIds.forEach(id => {
+            if (!nextIds.has(id)) {
+                batch.delete(doc(db, "dashboard_expense_tags", id));
+            }
+        });
+
+        await batch.commit();
+    } catch (error) {
+        console.warn("No se pudieron sincronizar los accesos de gasto:", error);
+    } finally {
+        isSyncingExpenseTags = false;
+    }
+}
+
+function subscribeProducts() {
+    if (!db) return;
+
+    const productsQuery = query(collection(db, "dashboard_products"), orderBy("order", "asc"));
+    onSnapshot(productsQuery, async (snapshot) => {
+        if (snapshot.empty) {
+            await syncProductsToCloud();
+            return;
+        }
+
+        customProducts = snapshot.docs.map(item => ({
+            id: item.id,
+            ...item.data()
+        }));
+        saveLocalState(STORAGE_KEYS.products, customProducts);
+        renderProductsList();
+        renderManageProducts();
+    }, (error) => {
+        console.warn("No se pudieron leer los productos desde Firebase:", error);
+    });
+}
+
+function subscribeExpenseTags() {
+    if (!db) return;
+
+    const tagsQuery = query(collection(db, "dashboard_expense_tags"), orderBy("order", "asc"));
+    onSnapshot(tagsQuery, async (snapshot) => {
+        if (snapshot.empty) {
+            await syncExpenseTagsToCloud();
+            return;
+        }
+
+        customExpenseTags = normalizeExpenseTags(snapshot.docs.map(item => ({
+            id: item.id,
+            ...item.data()
+        })));
+        saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
+        renderExpenseTags();
+        renderManageExpenseTags();
+    }, (error) => {
+        console.warn("No se pudieron leer los accesos de gasto desde Firebase:", error);
+    });
 }
 
 // Format Currency
@@ -130,6 +253,20 @@ const formatMoney = (amount) => {
         currency: 'MXN'
     }).format(amount || 0);
 };
+
+function normalizeExpenseTags(tags) {
+    return (tags || []).map((tag, index) => {
+        if (typeof tag === 'string') {
+            return { id: `exp_${index}_${tag.toLowerCase().replace(/\s+/g, '_')}`, name: tag, order: index };
+        }
+
+        return {
+            id: tag.id || `exp_${index}_${(tag.name || '').toLowerCase().replace(/\s+/g, '_')}`,
+            name: tag.name || '',
+            order: typeof tag.order === 'number' ? tag.order : index
+        };
+    }).filter(tag => tag.name);
+}
 
 // UI Feedback
 function showToast(message) {
@@ -229,12 +366,11 @@ function setupEventListeners() {
     btnSaveNewExpense.addEventListener('click', () => {
         const name = document.getElementById('new-exp-name').value.trim();
         if (name) {
-            customExpenseTags.push(name);
-            saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
+            customExpenseTags = upsertExpenseTag(customExpenseTags, { name });
+            saveExpenseTagsState();
 
             document.getElementById('new-exp-name').value = '';
             newExpenseForm.style.display = 'none';
-            renderExpenseTags();
             showToast("Atajo agregado");
         }
     });
@@ -251,6 +387,19 @@ function setupEventListeners() {
     if (btnManageSaveProd) {
         btnManageSaveProd.addEventListener('click', () => {
             saveManagedProduct();
+        });
+    }
+
+    if (btnAddExpenseManage) {
+        btnAddExpenseManage.addEventListener('click', () => {
+            if (editingExpenseTagId) resetManageExpenseForm();
+            manageExpenseForm.style.display = manageExpenseForm.style.display === 'none' ? 'block' : 'none';
+        });
+    }
+
+    if (btnManageSaveExpense) {
+        btnManageSaveExpense.addEventListener('click', () => {
+            saveManagedExpenseTag();
         });
     }
 
@@ -274,6 +423,27 @@ function setupEventListeners() {
             }
         });
     }
+
+    if (manageExpenseTagsList) {
+        manageExpenseTagsList.addEventListener('click', (event) => {
+            const actionButton = event.target.closest('[data-action]');
+            if (!actionButton) return;
+
+            const { action, id, index, dir } = actionButton.dataset;
+
+            if (action === 'expense-move') {
+                moveManagedExpenseTag(Number(index), Number(dir));
+            }
+
+            if (action === 'expense-edit') {
+                startEditingExpenseTag(id);
+            }
+
+            if (action === 'expense-delete') {
+                deleteManagedExpenseTag(id);
+            }
+        });
+    }
 }
 
 function switchView(viewName) {
@@ -285,7 +455,10 @@ function switchView(viewName) {
 
     if (viewName === 'dashboard') updateDashboard();
     if (viewName === 'transactions') renderFullHistory();
-    if (viewName === 'products') renderManageProducts();
+    if (viewName === 'products') {
+        renderManageProducts();
+        renderManageExpenseTags();
+    }
 }
 
 function openModal() {
@@ -394,9 +567,11 @@ function renderManageProducts() {
 }
 
 function saveProductsState() {
+    customProducts = customProducts.map((product, index) => ({ ...product, order: index }));
     saveLocalState(STORAGE_KEYS.products, customProducts);
     renderManageProducts();
     renderProductsList();
+    syncProductsToCloud();
 }
 
 function resetManageProductForm() {
@@ -453,6 +628,129 @@ function deleteManagedProduct(id) {
             manageForm.style.display = 'none';
         }
         saveProductsState();
+    }
+}
+
+function upsertExpenseTag(tags, payload, currentId = null) {
+    if (currentId) {
+        return tags.map((tag, index) => tag.id === currentId
+            ? { ...tag, ...payload, order: index }
+            : tag
+        );
+    }
+
+    return [
+        ...tags,
+        {
+            id: `exp_${Date.now()}`,
+            name: payload.name,
+            order: tags.length
+        }
+    ];
+}
+
+function moveExpenseTagInList(tags, index, direction) {
+    const newIndex = index + direction;
+    if (newIndex < 0 || newIndex >= tags.length) return tags;
+
+    const nextTags = [...tags];
+    const temp = nextTags[index];
+    nextTags[index] = nextTags[newIndex];
+    nextTags[newIndex] = temp;
+
+    return nextTags.map((tag, currentIndex) => ({ ...tag, order: currentIndex }));
+}
+
+function removeExpenseTagById(tags, id) {
+    return tags
+        .filter(tag => tag.id !== id)
+        .map((tag, index) => ({ ...tag, order: index }));
+}
+
+function saveExpenseTagsState() {
+    customExpenseTags = customExpenseTags.map((tag, index) => ({ ...tag, order: index }));
+    saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
+    renderExpenseTags();
+    renderManageExpenseTags();
+    syncExpenseTagsToCloud();
+}
+
+function resetManageExpenseForm() {
+    editingExpenseTagId = null;
+    manageExpenseNameInput.value = '';
+    btnManageSaveExpense.textContent = 'Guardar';
+}
+
+function saveManagedExpenseTag() {
+    const name = manageExpenseNameInput.value.trim();
+    if (!name) return;
+
+    if (editingExpenseTagId) {
+        customExpenseTags = upsertExpenseTag(customExpenseTags, { name }, editingExpenseTagId);
+        showToast("Acceso actualizado");
+    } else {
+        customExpenseTags = upsertExpenseTag(customExpenseTags, { name });
+        showToast("Acceso guardado");
+    }
+
+    saveExpenseTagsState();
+    resetManageExpenseForm();
+    manageExpenseForm.style.display = 'none';
+}
+
+function renderManageExpenseTags() {
+    if (!manageExpenseTagsList) return;
+
+    manageExpenseTagsList.innerHTML = '';
+    manageExpenseTagsList.className = 'view-products-grid';
+
+    customExpenseTags.forEach((tag, index) => {
+        const div = document.createElement('div');
+        div.className = 'product-manage-card';
+        div.innerHTML = `
+            <div style="display:flex; align-items:center; gap:0.75rem;">
+                <div style="display:flex; flex-direction:column; gap:0.25rem;">
+                    <button class="btn-icon" data-action="expense-move" data-index="${index}" data-dir="-1" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
+                    <button class="btn-icon" data-action="expense-move" data-index="${index}" data-dir="1" ${index === customExpenseTags.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
+                </div>
+                <div>
+                    <div style="font-weight: 500;">${tag.name}</div>
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">Atajo de gasto</div>
+                </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+                <button class="btn-icon" data-action="expense-edit" data-id="${tag.id}"><i class="ph ph-pencil-simple"></i></button>
+                <button class="btn-icon delete" data-action="expense-delete" data-id="${tag.id}"><i class="ph ph-trash"></i></button>
+            </div>
+        `;
+        manageExpenseTagsList.appendChild(div);
+    });
+}
+
+function startEditingExpenseTag(id) {
+    const tag = customExpenseTags.find(item => item.id === id);
+    if (!tag) return;
+
+    editingExpenseTagId = id;
+    manageExpenseNameInput.value = tag.name;
+    btnManageSaveExpense.textContent = 'Actualizar';
+    manageExpenseForm.style.display = 'block';
+    manageExpenseNameInput.focus();
+}
+
+function moveManagedExpenseTag(index, dir) {
+    customExpenseTags = moveExpenseTagInList(customExpenseTags, index, dir);
+    saveExpenseTagsState();
+}
+
+function deleteManagedExpenseTag(id) {
+    if (confirm("Â¿EstÃ¡s seguro de que quieres eliminar este acceso de gasto?")) {
+        customExpenseTags = removeExpenseTagById(customExpenseTags, id);
+        if (editingExpenseTagId === id) {
+            resetManageExpenseForm();
+            manageExpenseForm.style.display = 'none';
+        }
+        saveExpenseTagsState();
     }
 }
 
@@ -647,9 +945,9 @@ function renderExpenseTags() {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'expense-tag';
-        btn.textContent = tag;
+        btn.textContent = tag.name;
         btn.addEventListener('click', () => {
-            document.getElementById('description').value = tag;
+            document.getElementById('description').value = tag.name;
             showToast("Atajo pegado en descripción");
         });
         expenseTagsContainer.appendChild(btn);

@@ -240,6 +240,21 @@
                         <!-- js injected -->
                     </div>
                 </section>
+                <section class="recent-transactions full-height">
+                    <div class="section-header">
+                        <h3>Accesos Rápidos de Gastos</h3>
+                        <button class="btn-text" id="btn-add-expense-manage"><i class="ph ph-plus"></i> Nuevo Acceso</button>
+                    </div>
+                    <div id="manage-new-expense-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--danger);">
+                        <div style="display: grid; grid-template-columns: 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <input type="text" id="manage-exp-name" placeholder="Nombre (Ej. Pan, Carne)">
+                        </div>
+                        <button type="button" id="manage-save-expense" style="background: var(--success); color: white; border: none; padding: 0.75rem 1rem; border-radius: 6px; cursor: pointer; width: 100%;">Guardar</button>
+                    </div>
+                    <div id="manage-expense-tags-list">
+                        <!-- js injected -->
+                    </div>
+                </section>
             </div>
         </main>
     </div>
@@ -358,4 +373,5 @@
     <script type="module" src="js/app.js"></script>
 </body>
 </html>
+
 
