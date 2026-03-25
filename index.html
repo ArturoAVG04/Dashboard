@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Business Finance Tracker</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/styles.css">
+    
+    <!-- Phosphor Icons (Sleek Icons) -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+</head>
+<body class="dark-theme">
+
+    <!-- Login Screen -->
+    <div id="login-screen">
+        <div class="login-card">
+            <i class="ph-fill ph-storefront" style="font-size: 3rem; color: var(--primary); margin-bottom: 1rem;"></i>
+            <h2>Acceso Administrativo</h2>
+            <p>Por favor ingresa tu contraseña para ver los datos del negocio.</p>
+            <form id="login-form">
+                <input type="password" id="login-password" placeholder="Ingresa la contraseña" required>
+                <button type="submit" class="submit-btn" style="margin-top: 1rem;">Entrar al Panel</button>
+            </form>
+            <p id="login-error" style="color: var(--danger); font-size: 0.8rem; display: none; margin-top: 1rem;">Contraseña incorrecta</p>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div class="app-container" id="main-app" style="display: none;">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <i class="ph-fill ph-storefront"></i>
+                <h2>La<span>Barra</span></h2>
+            </div>
+            
+            <nav class="side-nav">
+                <button class="new-btn" id="btn-new-transaction" style="margin-bottom: 1.5rem;">
+                    <i class="ph ph-plus-circle"></i> <span>Nuevo Registro</span>
+                </button>
+                <button class="nav-item active" id="nav-dashboard">
+                    <i class="ph ph-squares-four"></i> Principal
+                </button>
+                <button class="nav-item" id="nav-transactions">
+                    <i class="ph ph-list-dashes"></i> Historial
+                </button>
+                <button class="nav-item" id="nav-products">
+                    <i class="ph ph-package"></i> Productos
+                </button>
+                <button class="nav-item" id="nav-backup">
+                    <i class="ph ph-download-simple"></i> Respaldos
+                </button>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-header">
+                <div>
+                    <h1 id="page-title">Dashboard</h1>
+                    <p class="subtitle" id="current-date-display">Resumen de tu negocio</p>
+                </div>
+                <div class="time-filters">
+                    <button class="filter-btn active" data-filter="day">Hoy</button>
+                    <button class="filter-btn" data-filter="week">Semana</button>
+                    <button class="filter-btn" data-filter="month">Mes</button>
+                    <button class="filter-btn" data-filter="year">Año</button>
+                    <button class="filter-btn" data-filter="all">Todos</button>
+                    <div class="custom-date-filter" style="margin-left: 0.5rem; border-left: 1px solid var(--border-color); padding-left: 0.5rem; flex-shrink: 0; display: flex; align-items: center;">
+                        <i class="ph ph-calendar-blank" style="color: var(--text-muted); margin-right: 0.5rem; font-size: 1.1rem;"></i>
+                        <input type="text" id="flatpickr-range" class="date-input-mobile" placeholder="Fechas personalizadas..." readonly style="cursor: pointer;">
+                    </div>
+                </div>
+            </header>
+
+            <!-- Views Container -->
+            <div id="view-dashboard" class="view active-view">
+                <!-- Summary Cards -->
+                <section class="summary-cards">
+                    <div class="card income-card">
+                        <div class="card-header">
+                            <div class="icon-wrap"><i class="ph ph-arrow-up-right"></i></div>
+                            <h3>Ventas / Ingresos</h3>
+                        </div>
+                        <div class="amount" id="summary-income">$0.00</div>
+                    </div>
+                    
+                    <div class="card expense-card">
+                        <div class="card-header">
+                            <div class="icon-wrap"><i class="ph ph-arrow-down-right"></i></div>
+                            <h3>Gastos</h3>
+                        </div>
+                        <div class="amount" id="summary-expense">$0.00</div>
+                    </div>
+                    
+                    <div class="card profit-card">
+                        <div class="card-header">
+                            <div class="icon-wrap"><i class="ph ph-chart-line-up"></i></div>
+                            <h3>Ganancia Neta</h3>
+                        </div>
+                        <div class="amount" id="summary-profit">$0.00</div>
+                    </div>
+                </section>
+
+                <!-- Charts Section -->
+                <section class="charts-section">
+                    <div class="chart-card">
+                        <h3>Flujo Financiero</h3>
+                        <div class="canvas-wrapper">
+                            <canvas id="mainChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="chart-card sm">
+                        <h3>Balance General</h3>
+                        <div class="canvas-wrapper" style="min-height: 200px;">
+                            <canvas id="categoryChart"></canvas>
+                        </div>
+                        <div id="balance-stats-container"></div>
+                    </div>
+                </section>
+                
+                <!-- Recent Transactions Mini Table -->
+                <section class="recent-transactions mt-2">
+                    <div class="section-header">
+                        <h3>Transacciones Recientes</h3>
+                        <button class="btn-text" id="btn-view-all">Ver todas</button>
+                    </div>
+                    <div class="table-container">
+                        <table class="transactions-table">
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>Tipo</th>
+                                    <th>Descripción</th>
+                                    <th>Categoría</th>
+                                    <th class="align-right">Monto</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-tbody">
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Full History View -->
+            <div id="view-transactions" class="view">
+                 <section class="recent-transactions full-height">
+                    <div class="table-container large-table">
+                        <table class="transactions-table">
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>Tipo</th>
+                                    <th>Descripción</th>
+                                    <th>Categoría</th>
+                                    <th class="align-right">Monto</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="history-tbody">
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+                
+                <section class="recent-transactions full-height mt-2">
+                    <div class="section-header">
+                        <h3>Productos Vendidos</h3>
+                    </div>
+                    <div class="table-container large-table">
+                        <table class="transactions-table">
+                            <thead>
+                                <tr>
+                                    <th>Producto</th>
+                                    <th class="align-right">Cantidad Vendida</th>
+                                    <th class="align-right">Total Generado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="top-sellers-tbody">
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Backup & Export View -->
+            <div id="view-backup" class="view">
+                <section class="recent-transactions full-height">
+                    <div class="section-header">
+                        <h3>Respaldos y Exportación</h3>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-top: 1rem;">
+                        <div class="card" style="display:flex; flex-direction:column; gap:1rem; text-align:center;">
+                            <i class="ph ph-image" style="font-size: 3rem; color: var(--primary);"></i>
+                            <h4>Resumen Visual (Imagen)</h4>
+                            <p style="font-size: 0.85rem; color: var(--text-muted);">Toma una "foto" del panel principal con los números y gráficas de tu filtro de fecha actual para enviarlo fácilmente.</p>
+                            <button id="btn-export-image" class="submit-btn" style="margin-top:auto;"><i class="ph ph-download"></i> Descargar Imagen</button>
+                        </div>
+                        <div class="card" style="display:flex; flex-direction:column; gap:1rem; text-align:center;">
+                            <i class="ph ph-microsoft-excel-logo" style="font-size: 3rem; color: var(--success);"></i>
+                            <h4>Respaldo de Datos (Excel / CSV)</h4>
+                            <p style="font-size: 0.85rem; color: var(--text-muted);">Descarga una sábana de Excel con todas las ventas y gastos del periodo seleccionado. Ideal para contabilidad.</p>
+                            <button id="btn-export-csv" class="submit-btn" style="margin-top:auto; background:var(--success);"><i class="ph ph-download"></i> Exportar a Excel</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Products Management View -->
+            <div id="view-products" class="view">
+                <section class="recent-transactions full-height">
+                    <div class="section-header">
+                        <h3>Gestión de Productos</h3>
+                        <button class="btn-text" id="btn-add-product-manage"><i class="ph ph-plus"></i> Nuevo Producto</button>
+                    </div>
+                    <div id="manage-new-product-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--primary);">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <input type="text" id="manage-prod-name" placeholder="Nombre (Ej. Refresco Lata)">
+                            <input type="number" id="manage-prod-price" placeholder="Precio ($)" min="0" step="0.5">
+                        </div>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <select id="manage-prod-cat" style="flex-grow: 1;">
+                                <option value="Hamburguesas">Hamburguesas</option>
+                                <option value="Snacks">Snacks</option>
+                                <option value="Otros">Otros</option>
+                            </select>
+                            <button type="button" id="manage-save-product" style="background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer;">Guardar</button>
+                        </div>
+                    </div>
+                    <div id="manage-products-list">
+                        <!-- js injected -->
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal Form -->
+    <div class="modal-overlay" id="transaction-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Registrar Movimiento</h2>
+                <button class="close-btn" id="close-modal"><i class="ph ph-x"></i></button>
+            </div>
+            <form id="transaction-form">
+                <div class="type-selector">
+                    <label class="radio-card income-radio">
+                        <input type="radio" name="type" value="income" checked>
+                        <div class="radio-content">
+                            <i class="ph ph-storefront"></i> Nueva Venta
+                        </div>
+                    </label>
+                    <label class="radio-card expense-radio">
+                        <input type="radio" name="type" value="expense">
+                        <div class="radio-content">
+                            <i class="ph ph-shopping-cart"></i> Gasto / Insumo
+                        </div>
+                    </label>
+                </div>
+
+                <div id="extra-sales-fields">
+                    <div class="form-group">
+                        <label>Zona de Venta</label>
+                        <select id="zone-select"></select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <label style="margin: 0;">Productos Vendidos</label>
+                            <button type="button" class="btn-text" id="toggle-add-product" style="font-size: 0.8rem;"><i class="ph ph-plus"></i> Nuevo</button>
+                        </div>
+                        
+                        <div id="new-product-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--primary);">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <input type="text" id="new-prod-name" placeholder="Nombre (Ej. Refresco Lata)">
+                                <input type="number" id="new-prod-price" placeholder="Precio ($)" min="0" step="0.5">
+                            </div>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <select id="new-prod-cat" style="flex-grow: 1;">
+                                    <option value="Hamburguesas">Hamburguesas</option>
+                                    <option value="Snacks">Snacks</option>
+                                    <option value="Otros">Otros</option>
+                                </select>
+                                <button type="button" id="save-new-product" style="background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer;">Guardar</button>
+                            </div>
+                        </div>
+
+                        <div class="products-list-container scrollable-products" id="products-container">
+                            <!-- Injected by JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DESCRIPTION ONLY FOR EXPENSES -->
+                <div id="desc-group" style="display:none;">
+                    <div class="form-group">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <label style="margin: 0;">Atajos de Insumos / Gastos</label>
+                            <button type="button" class="btn-text" id="toggle-add-expense" style="font-size: 0.8rem;"><i class="ph ph-plus"></i> Nuevo</button>
+                        </div>
+
+                        <div id="new-expense-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--danger);">
+                            <div style="display: grid; grid-template-columns: 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <input type="text" id="new-exp-name" placeholder="Nombre (Ej. Pan, Carne)">
+                            </div>
+                            <button type="button" id="save-new-expense" style="background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; width: 100%;">Agregar a Atajos</button>
+                        </div>
+                        
+                        <div id="expense-tags-container" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+                            <!-- Injected tags -->
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="description">Descripción Final del Gasto</label>
+                        <input type="text" id="description" placeholder="Haz clic en un atajo o escribe aquí...">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="amount" id="amount-label">Total de la Venta ($)</label>
+                        <input type="number" id="amount" step="0.5" min="0" placeholder="0.00" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="date">Fecha</label>
+                        <input type="date" id="date" required>
+                    </div>
+                </div>
+
+                <button type="submit" class="submit-btn"><i class="ph ph-check-circle"></i> Guardar Registro</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Libraries (CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/date-fns.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://npmcdn.com/flatpickr/dist/themes/dark.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://npmcdn.com/flatpickr/dist/l10n/es.js"></script>
+    
+    <!-- Firebase SDK (Modular) -->
+    <script type="module" src="js/firebase-config.js"></script>
+    
+    <!-- App Logic -->
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
