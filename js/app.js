@@ -1,5 +1,5 @@
 import { db } from './firebase-config.js';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, writeBatch, updateDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, writeBatch, updateDoc, where } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 import { INITIAL_ZONES, INITIAL_PRODUCTS, INITIAL_EXPENSE_TAGS, INITIAL_CATEGORIES } from './constants.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from './storage.js';
 import { authenticate, isAuthenticated } from './auth.js';
@@ -630,11 +630,7 @@ function setupEventListeners() {
             const actionButton = event.target.closest('[data-action]');
             if (!actionButton) return;
 
-            const { action, id, index, dir } = actionButton.dataset;
-
-            if (action === 'expense-move') {
-                moveManagedExpenseTag(Number(index), Number(dir));
-            }
+            const { action, id } = actionButton.dataset;
 
             if (action === 'expense-edit') {
                 startEditingExpenseTag(id);
@@ -840,6 +836,35 @@ function saveProductsState() {
     syncProductsToCloud();
 }
 
+async function renameTransactionsBranch(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+
+    transactions = transactions.map((transaction) => transaction.zone === oldName
+        ? { ...transaction, zone: newName }
+        : transaction
+    );
+    saveLocalState(STORAGE_KEYS.transactions, transactions);
+    updateDashboard();
+    if (views.transactions.classList.contains('active-view')) {
+        renderFullHistory();
+    }
+
+    if (!db) return;
+
+    try {
+        const affectedTransactions = await getDocs(query(collection(db, "transactions"), where("zone", "==", oldName)));
+        if (affectedTransactions.empty) return;
+
+        const batch = writeBatch(db);
+        affectedTransactions.forEach((item) => {
+            batch.update(doc(db, "transactions", item.id), { zone: newName });
+        });
+        await batch.commit();
+    } catch (error) {
+        console.warn("No se pudieron actualizar las sucursales en el historial:", error);
+    }
+}
+
 function saveBranchesState() {
     customBranches = sortNamedListAlphabetically(customBranches);
     saveLocalState(STORAGE_KEYS.branches, customBranches);
@@ -964,10 +989,22 @@ function saveManagedCategory() {
     const name = manageCategoryNameInput.value.trim();
     if (!name) return;
     const isEditing = Boolean(editingCategoryId);
+    const existingCategory = editingCategoryId
+        ? customCategories.find(item => item.id === editingCategoryId)
+        : null;
+    const previousName = existingCategory?.name || null;
 
     if (hasDuplicateName(customCategories, name, editingCategoryId)) {
         showToast("Esa categoría ya existe");
         return;
+    }
+
+    if (previousName && previousName !== name) {
+        customProducts = customProducts.map(product => product.category === previousName
+            ? { ...product, category: name }
+            : product
+        );
+        saveProductsState();
     }
 
     customCategories = upsertNamedItem(customCategories, { name }, 'cat', editingCategoryId);
@@ -1047,6 +1084,10 @@ function saveManagedBranch() {
     const name = manageBranchNameInput.value.trim();
     if (!name) return;
     const isEditing = Boolean(editingBranchId);
+    const existingBranch = editingBranchId
+        ? customBranches.find(item => item.id === editingBranchId)
+        : null;
+    const previousName = existingBranch?.name || null;
 
     if (hasDuplicateName(customBranches, name, editingBranchId)) {
         showToast("Esa sucursal ya existe");
@@ -1055,6 +1096,9 @@ function saveManagedBranch() {
 
     customBranches = upsertNamedItem(customBranches, { name }, 'branch', editingBranchId);
     saveBranchesState();
+    if (previousName && previousName !== name) {
+        renameTransactionsBranch(previousName, name);
+    }
     resetManageBranchForm();
     manageBranchForm.style.display = 'none';
     showToast(isEditing ? "Sucursal actualizada" : "Sucursal guardada");
@@ -1107,18 +1151,6 @@ function upsertExpenseTag(tags, payload, currentId = null) {
             order: tags.length
         }
     ];
-}
-
-function moveExpenseTagInList(tags, index, direction) {
-    const newIndex = index + direction;
-    if (newIndex < 0 || newIndex >= tags.length) return tags;
-
-    const nextTags = [...tags];
-    const temp = nextTags[index];
-    nextTags[index] = nextTags[newIndex];
-    nextTags[newIndex] = temp;
-
-    return nextTags.map((tag, currentIndex) => ({ ...tag, order: currentIndex }));
 }
 
 function removeExpenseTagById(tags, id) {
@@ -1199,13 +1231,8 @@ function startEditingExpenseTag(id) {
     manageExpenseNameInput.focus();
 }
 
-function moveManagedExpenseTag(index, dir) {
-    customExpenseTags = moveExpenseTagInList(customExpenseTags, index, dir);
-    saveExpenseTagsState();
-}
-
 function deleteManagedExpenseTag(id) {
-    if (confirm("Â¿EstÃ¡s seguro de que quieres eliminar este acceso de gasto?")) {
+    if (confirm("¿Estás seguro de que quieres eliminar este acceso de gasto?")) {
         customExpenseTags = removeExpenseTagById(customExpenseTags, id);
         if (editingExpenseTagId === id) {
             resetManageExpenseForm();
