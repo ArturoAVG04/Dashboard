@@ -370,6 +370,12 @@ h1 {
 
 .align-right { text-align: right; }
 
+.history-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
 .badge {
     padding: 0.25rem 0.75rem;
     border-radius: 999px;
@@ -810,6 +816,30 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .balance-result.profit { color: var(--success); }
 .balance-result.loss { color: var(--danger); }
 
+.branch-sales-list {
+    display: grid;
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.branch-sales-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.8rem 1rem;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border-color);
+}
+
+.branch-sales-item span {
+    color: var(--text-muted);
+}
+
+.branch-sales-item strong {
+    color: var(--text-main);
+}
+
 /* Manage Products */
 .view-products-grid {
     display: grid;
@@ -995,6 +1025,30 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 .login-card h2 { margin-bottom: 0.5rem; }
 .login-card p { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
+
+.password-field {
+    position: relative;
+}
+
+.password-field input {
+    padding-right: 3rem;
+}
+
+.password-toggle {
+    position: absolute;
+    top: 50%;
+    right: 0.65rem;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1.15rem;
+}
+
+.password-toggle:hover {
+    color: var(--text-main);
+}
 
 /* Global fix for Android/iOS native dark mode date pickers */
 .date-input-mobile {

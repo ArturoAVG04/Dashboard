@@ -1,7 +1,9 @@
 export const STORAGE_KEYS = {
     transactions: 'localTransactions',
     products: 'customProducts',
-    expenseTags: 'customExpenseTags'
+    expenseTags: 'customExpenseTags',
+    branches: 'customBranches',
+    categories: 'customCategories'
 };
 
 function parseJSON(value, fallback) {

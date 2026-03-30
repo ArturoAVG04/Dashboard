@@ -1,6 +1,6 @@
 import { db } from './firebase-config.js';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
-import { INITIAL_ZONES, INITIAL_PRODUCTS, INITIAL_EXPENSE_TAGS } from './constants.js';
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, writeBatch, updateDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { INITIAL_ZONES, INITIAL_PRODUCTS, INITIAL_EXPENSE_TAGS, INITIAL_CATEGORIES } from './constants.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from './storage.js';
 import { authenticate, isAuthenticated } from './auth.js';
 import { groupProductsByCategory, upsertProduct, moveProductInList, removeProductById } from './product-utils.js';
@@ -10,15 +10,22 @@ let transactions = loadLocalState(STORAGE_KEYS.transactions, []);
 let currentFilter = 'day'; // Match UI default
 let charts = { main: null, category: null };
 let customProducts = loadLocalState(STORAGE_KEYS.products, INITIAL_PRODUCTS);
-let customExpenseTags = normalizeExpenseTags(loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS));
+let customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS)));
+let customBranches = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.branches, INITIAL_ZONES), 'branch'));
+let customCategories = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.categories, INITIAL_CATEGORIES), 'cat'));
 
 let customStartDate = null;
 let customEndDate = null;
 let customDateLabel = "";
 let editingProductId = null;
 let editingExpenseTagId = null;
+let editingBranchId = null;
+let editingCategoryId = null;
+let editingTransactionId = null;
 let isSyncingProducts = false;
 let isSyncingExpenseTags = false;
+let isSyncingBranches = false;
+let isSyncingCategories = false;
 
 // DOM Elements
 const views = {
@@ -51,10 +58,12 @@ const mainApp = document.getElementById('main-app');
 const loginForm = document.getElementById('login-form');
 const loginPassword = document.getElementById('login-password');
 const loginError = document.getElementById('login-error');
+const btnToggleLoginPassword = document.getElementById('toggle-login-password');
 
 const recentTbody = document.getElementById('recent-tbody');
 const historyTbody = document.getElementById('history-tbody');
 const topSellersTbody = document.getElementById('top-sellers-tbody');
+const branchSalesList = document.getElementById('branch-sales-list');
 
 // Form specific elements
 const typeSelectors = document.querySelectorAll('input[name="type"]');
@@ -77,6 +86,7 @@ const manageForm = document.getElementById('manage-new-product-form');
 const manageNameInput = document.getElementById('manage-prod-name');
 const managePriceInput = document.getElementById('manage-prod-price');
 const manageCategoryInput = document.getElementById('manage-prod-cat');
+const modalProductCategoryInput = document.getElementById('new-prod-cat');
 const btnManageSaveProd = document.getElementById('manage-save-product');
 const manageProductsList = document.getElementById('manage-products-list');
 const manageExpenseForm = document.getElementById('manage-new-expense-form');
@@ -84,6 +94,17 @@ const manageExpenseNameInput = document.getElementById('manage-exp-name');
 const btnAddExpenseManage = document.getElementById('btn-add-expense-manage');
 const btnManageSaveExpense = document.getElementById('manage-save-expense');
 const manageExpenseTagsList = document.getElementById('manage-expense-tags-list');
+const manageCategoryForm = document.getElementById('manage-new-category-form');
+const manageCategoryNameInput = document.getElementById('manage-category-name');
+const btnAddCategoryManage = document.getElementById('btn-add-category-manage');
+const btnManageSaveCategory = document.getElementById('manage-save-category');
+const manageCategoriesList = document.getElementById('manage-categories-list');
+const manageBranchForm = document.getElementById('manage-new-branch-form');
+const manageBranchNameInput = document.getElementById('manage-branch-name');
+const btnAddBranchManage = document.getElementById('btn-add-branch-manage');
+const btnManageSaveBranch = document.getElementById('manage-save-branch');
+const manageBranchesList = document.getElementById('manage-branches-list');
+const modalTitle = document.getElementById('transaction-modal-title');
 
 // Init App
 function init() {
@@ -109,8 +130,12 @@ function init() {
     setupEventListeners();
     initCharts();
     initFormZones();
+    renderCategoryOptions();
     renderProductsList();
     renderExpenseTags();
+    renderManageCategories();
+    renderManageBranches();
+    renderManageProducts();
     renderManageExpenseTags();
 
     // Auth Check
@@ -132,6 +157,8 @@ function unlockApp() {
     fetchTransactions();
     subscribeProducts();
     subscribeExpenseTags();
+    subscribeBranches();
+    subscribeCategories();
 }
 
 async function syncProductsToCloud() {
@@ -202,6 +229,66 @@ async function syncExpenseTagsToCloud() {
     }
 }
 
+async function syncBranchesToCloud() {
+    if (!db || isSyncingBranches) return;
+
+    isSyncingBranches = true;
+    try {
+        const collectionRef = collection(db, "dashboard_branches");
+        const existingSnapshot = await getDocs(collectionRef);
+        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
+        const nextIds = new Set(customBranches.map(item => item.id));
+        const batch = writeBatch(db);
+
+        customBranches.forEach((branch, index) => {
+            const ref = doc(db, "dashboard_branches", branch.id);
+            batch.set(ref, { name: branch.name, order: index });
+        });
+
+        existingIds.forEach(id => {
+            if (!nextIds.has(id)) {
+                batch.delete(doc(db, "dashboard_branches", id));
+            }
+        });
+
+        await batch.commit();
+    } catch (error) {
+        console.warn("No se pudieron sincronizar las sucursales:", error);
+    } finally {
+        isSyncingBranches = false;
+    }
+}
+
+async function syncCategoriesToCloud() {
+    if (!db || isSyncingCategories) return;
+
+    isSyncingCategories = true;
+    try {
+        const collectionRef = collection(db, "dashboard_categories");
+        const existingSnapshot = await getDocs(collectionRef);
+        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
+        const nextIds = new Set(customCategories.map(item => item.id));
+        const batch = writeBatch(db);
+
+        customCategories.forEach((category, index) => {
+            const ref = doc(db, "dashboard_categories", category.id);
+            batch.set(ref, { name: category.name, order: index });
+        });
+
+        existingIds.forEach(id => {
+            if (!nextIds.has(id)) {
+                batch.delete(doc(db, "dashboard_categories", id));
+            }
+        });
+
+        await batch.commit();
+    } catch (error) {
+        console.warn("No se pudieron sincronizar las categorías:", error);
+    } finally {
+        isSyncingCategories = false;
+    }
+}
+
 function subscribeProducts() {
     if (!db) return;
 
@@ -234,15 +321,62 @@ function subscribeExpenseTags() {
             return;
         }
 
-        customExpenseTags = normalizeExpenseTags(snapshot.docs.map(item => ({
+        customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(snapshot.docs.map(item => ({
             id: item.id,
             ...item.data()
-        })));
+        }))));
         saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
         renderExpenseTags();
         renderManageExpenseTags();
     }, (error) => {
         console.warn("No se pudieron leer los accesos de gasto desde Firebase:", error);
+    });
+}
+
+function subscribeBranches() {
+    if (!db) return;
+
+    const branchesQuery = query(collection(db, "dashboard_branches"), orderBy("order", "asc"));
+    onSnapshot(branchesQuery, async (snapshot) => {
+        if (snapshot.empty) {
+            await syncBranchesToCloud();
+            return;
+        }
+
+        customBranches = sortNamedListAlphabetically(normalizeNamedList(snapshot.docs.map(item => ({
+            id: item.id,
+            ...item.data()
+        })), 'branch'));
+        saveLocalState(STORAGE_KEYS.branches, customBranches);
+        initFormZones();
+        renderManageBranches();
+        updateDashboard();
+    }, (error) => {
+        console.warn("No se pudieron leer las sucursales desde Firebase:", error);
+    });
+}
+
+function subscribeCategories() {
+    if (!db) return;
+
+    const categoriesQuery = query(collection(db, "dashboard_categories"), orderBy("order", "asc"));
+    onSnapshot(categoriesQuery, async (snapshot) => {
+        if (snapshot.empty) {
+            await syncCategoriesToCloud();
+            return;
+        }
+
+        customCategories = sortNamedListAlphabetically(normalizeNamedList(snapshot.docs.map(item => ({
+            id: item.id,
+            ...item.data()
+        })), 'cat'));
+        saveLocalState(STORAGE_KEYS.categories, customCategories);
+        renderCategoryOptions();
+        renderProductsList();
+        renderManageCategories();
+        renderManageProducts();
+    }, (error) => {
+        console.warn("No se pudieron leer las categorías desde Firebase:", error);
     });
 }
 
@@ -266,6 +400,35 @@ function normalizeExpenseTags(tags) {
             order: typeof tag.order === 'number' ? tag.order : index
         };
     }).filter(tag => tag.name);
+}
+
+function normalizeNamedList(items, prefix) {
+    return (items || []).map((item, index) => {
+        if (typeof item === 'string') {
+            return {
+                id: `${prefix}_${index}_${item.toLowerCase().replace(/\s+/g, '_')}`,
+                name: item,
+                order: index
+            };
+        }
+
+        return {
+            id: item.id || `${prefix}_${index}_${(item.name || '').toLowerCase().replace(/\s+/g, '_')}`,
+            name: item.name || '',
+            order: typeof item.order === 'number' ? item.order : index
+        };
+    }).filter(item => item.name);
+}
+
+function sortNamedListAlphabetically(items) {
+    return [...items]
+        .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }))
+        .map((item, index) => ({ ...item, order: index }));
+}
+
+function hasDuplicateName(items, name, ignoreId = null) {
+    const normalizedName = normalizeText(name);
+    return items.some(item => item.id !== ignoreId && normalizeText(item.name) === normalizedName);
 }
 
 // UI Feedback
@@ -301,6 +464,14 @@ function setupEventListeners() {
             } else {
                 loginError.style.display = 'block';
             }
+        });
+    }
+
+    if (btnToggleLoginPassword) {
+        btnToggleLoginPassword.addEventListener('click', () => {
+            const isHidden = loginPassword.type === 'password';
+            loginPassword.type = isHidden ? 'text' : 'password';
+            btnToggleLoginPassword.innerHTML = `<i class="ph ${isHidden ? 'ph-eye-slash' : 'ph-eye'}"></i>`;
         });
     }
 
@@ -350,7 +521,7 @@ function setupEventListeners() {
     btnSaveNewProduct.addEventListener('click', () => {
         const name = document.getElementById('new-prod-name').value.trim();
         const price = parseFloat(document.getElementById('new-prod-price').value);
-        const cat = document.getElementById('new-prod-cat').value;
+        const cat = modalProductCategoryInput.value;
         if (name && !isNaN(price)) {
             customProducts = upsertProduct(customProducts, { name, price, category: cat });
 
@@ -366,6 +537,10 @@ function setupEventListeners() {
     btnSaveNewExpense.addEventListener('click', () => {
         const name = document.getElementById('new-exp-name').value.trim();
         if (name) {
+            if (hasDuplicateName(customExpenseTags, name)) {
+                showToast("Ese atajo ya está registrado");
+                return;
+            }
             customExpenseTags = upsertExpenseTag(customExpenseTags, { name });
             saveExpenseTagsState();
 
@@ -394,6 +569,32 @@ function setupEventListeners() {
         btnAddExpenseManage.addEventListener('click', () => {
             if (editingExpenseTagId) resetManageExpenseForm();
             manageExpenseForm.style.display = manageExpenseForm.style.display === 'none' ? 'block' : 'none';
+        });
+    }
+
+    if (btnAddCategoryManage) {
+        btnAddCategoryManage.addEventListener('click', () => {
+            if (editingCategoryId) resetManageCategoryForm();
+            manageCategoryForm.style.display = manageCategoryForm.style.display === 'none' ? 'block' : 'none';
+        });
+    }
+
+    if (btnManageSaveCategory) {
+        btnManageSaveCategory.addEventListener('click', () => {
+            saveManagedCategory();
+        });
+    }
+
+    if (btnAddBranchManage) {
+        btnAddBranchManage.addEventListener('click', () => {
+            if (editingBranchId) resetManageBranchForm();
+            manageBranchForm.style.display = manageBranchForm.style.display === 'none' ? 'block' : 'none';
+        });
+    }
+
+    if (btnManageSaveBranch) {
+        btnManageSaveBranch.addEventListener('click', () => {
+            saveManagedBranch();
         });
     }
 
@@ -444,6 +645,40 @@ function setupEventListeners() {
             }
         });
     }
+
+    if (manageCategoriesList) {
+        manageCategoriesList.addEventListener('click', (event) => {
+            const actionButton = event.target.closest('[data-action]');
+            if (!actionButton) return;
+
+            const { action, id } = actionButton.dataset;
+
+            if (action === 'category-edit') {
+                startEditingCategory(id);
+            }
+
+            if (action === 'category-delete') {
+                deleteManagedCategory(id);
+            }
+        });
+    }
+
+    if (manageBranchesList) {
+        manageBranchesList.addEventListener('click', (event) => {
+            const actionButton = event.target.closest('[data-action]');
+            if (!actionButton) return;
+
+            const { action, id } = actionButton.dataset;
+
+            if (action === 'branch-edit') {
+                startEditingBranch(id);
+            }
+
+            if (action === 'branch-delete') {
+                deleteManagedBranch(id);
+            }
+        });
+    }
 }
 
 function switchView(viewName) {
@@ -458,11 +693,15 @@ function switchView(viewName) {
     if (viewName === 'products') {
         renderManageProducts();
         renderManageExpenseTags();
+        renderManageCategories();
+        renderManageBranches();
     }
 }
 
-function openModal() {
+function openModal(transaction = null) {
     form.reset();
+    editingTransactionId = transaction?.id || null;
+    modalTitle.textContent = editingTransactionId ? 'Editar Movimiento' : 'Registrar Movimiento';
 
     // Set default date to LOCAL date instead of UTC to avoid "Tomorrow" timezone bugs.
     const tzOffset = (new Date()).getTimezoneOffset() * 60000;
@@ -476,19 +715,46 @@ function openModal() {
     document.querySelectorAll('.product-qty').forEach(input => input.value = 0);
     calculateSubtotals();
 
+    document.getElementById('description').value = '';
+    if (transaction) {
+        populateTransactionForm(transaction);
+    }
+
     modal.classList.add('open');
 }
 
 function closeModal() {
+    editingTransactionId = null;
+    modalTitle.textContent = 'Registrar Movimiento';
     modal.classList.remove('open');
 }
 
 function initFormZones() {
     zoneSelect.innerHTML = '';
-    INITIAL_ZONES.forEach(z => {
+    customBranches.forEach(branch => {
         const o = document.createElement('option');
-        o.value = o.textContent = z;
+        o.value = o.textContent = branch.name;
         zoneSelect.appendChild(o);
+    });
+}
+
+function renderCategoryOptions() {
+    const categoryNames = customCategories.map(item => item.name);
+
+    [manageCategoryInput, modalProductCategoryInput].forEach(select => {
+        if (!select) return;
+        const currentValue = select.value;
+        select.innerHTML = '';
+
+        categoryNames.forEach(category => {
+            const option = document.createElement('option');
+            option.value = option.textContent = category;
+            select.appendChild(option);
+        });
+
+        if (categoryNames.includes(currentValue)) {
+            select.value = currentValue;
+        }
     });
 }
 
@@ -574,11 +840,30 @@ function saveProductsState() {
     syncProductsToCloud();
 }
 
+function saveBranchesState() {
+    customBranches = sortNamedListAlphabetically(customBranches);
+    saveLocalState(STORAGE_KEYS.branches, customBranches);
+    initFormZones();
+    renderManageBranches();
+    updateDashboard();
+    syncBranchesToCloud();
+}
+
+function saveCategoriesState() {
+    customCategories = sortNamedListAlphabetically(customCategories);
+    saveLocalState(STORAGE_KEYS.categories, customCategories);
+    renderCategoryOptions();
+    renderManageCategories();
+    renderManageProducts();
+    renderProductsList();
+    syncCategoriesToCloud();
+}
+
 function resetManageProductForm() {
     editingProductId = null;
     manageNameInput.value = '';
     managePriceInput.value = '';
-    manageCategoryInput.value = 'Hamburguesas';
+    manageCategoryInput.value = customCategories[0]?.name || '';
     btnManageSaveProd.textContent = 'Guardar';
 }
 
@@ -600,6 +885,21 @@ function saveManagedProduct() {
     saveProductsState();
     resetManageProductForm();
     manageForm.style.display = 'none';
+}
+
+function upsertNamedItem(items, payload, prefix, currentId = null) {
+    if (currentId) {
+        return items.map(item => item.id === currentId ? { ...item, ...payload } : item);
+    }
+
+    return [
+        ...items,
+        {
+            id: `${prefix}_${Date.now()}`,
+            name: payload.name,
+            order: items.length
+        }
+    ];
 }
 
 function moveManagedProduct(index, dir) {
@@ -628,6 +928,166 @@ function deleteManagedProduct(id) {
             manageForm.style.display = 'none';
         }
         saveProductsState();
+    }
+}
+
+function resetManageCategoryForm() {
+    editingCategoryId = null;
+    manageCategoryNameInput.value = '';
+    btnManageSaveCategory.textContent = 'Guardar';
+}
+
+function renderManageCategories() {
+    if (!manageCategoriesList) return;
+
+    manageCategoriesList.innerHTML = '';
+    manageCategoriesList.className = 'view-products-grid';
+
+    customCategories.forEach(category => {
+        const div = document.createElement('div');
+        div.className = 'product-manage-card';
+        div.innerHTML = `
+            <div>
+                <div style="font-weight: 500;">${category.name}</div>
+                <div style="color: var(--text-muted); font-size: 0.85rem;">Categoría disponible</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+                <button class="btn-icon" data-action="category-edit" data-id="${category.id}"><i class="ph ph-pencil-simple"></i></button>
+                <button class="btn-icon delete" data-action="category-delete" data-id="${category.id}"><i class="ph ph-trash"></i></button>
+            </div>
+        `;
+        manageCategoriesList.appendChild(div);
+    });
+}
+
+function saveManagedCategory() {
+    const name = manageCategoryNameInput.value.trim();
+    if (!name) return;
+    const isEditing = Boolean(editingCategoryId);
+
+    if (hasDuplicateName(customCategories, name, editingCategoryId)) {
+        showToast("Esa categoría ya existe");
+        return;
+    }
+
+    customCategories = upsertNamedItem(customCategories, { name }, 'cat', editingCategoryId);
+    saveCategoriesState();
+    resetManageCategoryForm();
+    manageCategoryForm.style.display = 'none';
+    showToast(isEditing ? "Categoría actualizada" : "Categoría guardada");
+}
+
+function startEditingCategory(id) {
+    const category = customCategories.find(item => item.id === id);
+    if (!category) return;
+
+    editingCategoryId = id;
+    manageCategoryNameInput.value = category.name;
+    btnManageSaveCategory.textContent = 'Actualizar';
+    manageCategoryForm.style.display = 'block';
+    manageCategoryNameInput.focus();
+}
+
+function deleteManagedCategory(id) {
+    const category = customCategories.find(item => item.id === id);
+    if (!category) return;
+
+    const remainingCategories = customCategories.filter(item => item.id !== id);
+    if (remainingCategories.length === 0) {
+        showToast("Debe quedar al menos una categoría");
+        return;
+    }
+
+    if (confirm(`¿Eliminar la categoría "${category.name}"? Los productos de esa categoría pasarán a "${remainingCategories[0].name}".`)) {
+        customProducts = customProducts.map(product => product.category === category.name
+            ? { ...product, category: remainingCategories[0].name }
+            : product
+        );
+        saveProductsState();
+        customCategories = remainingCategories;
+        saveCategoriesState();
+        if (editingCategoryId === id) {
+            resetManageCategoryForm();
+            manageCategoryForm.style.display = 'none';
+        }
+        showToast("Categoría eliminada");
+    }
+}
+
+function resetManageBranchForm() {
+    editingBranchId = null;
+    manageBranchNameInput.value = '';
+    btnManageSaveBranch.textContent = 'Guardar';
+}
+
+function renderManageBranches() {
+    if (!manageBranchesList) return;
+
+    manageBranchesList.innerHTML = '';
+    manageBranchesList.className = 'view-products-grid';
+
+    customBranches.forEach(branch => {
+        const div = document.createElement('div');
+        div.className = 'product-manage-card';
+        div.innerHTML = `
+            <div>
+                <div style="font-weight: 500;">${branch.name}</div>
+                <div style="color: var(--text-muted); font-size: 0.85rem;">Sucursal de venta</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+                <button class="btn-icon" data-action="branch-edit" data-id="${branch.id}"><i class="ph ph-pencil-simple"></i></button>
+                <button class="btn-icon delete" data-action="branch-delete" data-id="${branch.id}"><i class="ph ph-trash"></i></button>
+            </div>
+        `;
+        manageBranchesList.appendChild(div);
+    });
+}
+
+function saveManagedBranch() {
+    const name = manageBranchNameInput.value.trim();
+    if (!name) return;
+    const isEditing = Boolean(editingBranchId);
+
+    if (hasDuplicateName(customBranches, name, editingBranchId)) {
+        showToast("Esa sucursal ya existe");
+        return;
+    }
+
+    customBranches = upsertNamedItem(customBranches, { name }, 'branch', editingBranchId);
+    saveBranchesState();
+    resetManageBranchForm();
+    manageBranchForm.style.display = 'none';
+    showToast(isEditing ? "Sucursal actualizada" : "Sucursal guardada");
+}
+
+function startEditingBranch(id) {
+    const branch = customBranches.find(item => item.id === id);
+    if (!branch) return;
+
+    editingBranchId = id;
+    manageBranchNameInput.value = branch.name;
+    btnManageSaveBranch.textContent = 'Actualizar';
+    manageBranchForm.style.display = 'block';
+    manageBranchNameInput.focus();
+}
+
+function deleteManagedBranch(id) {
+    if (customBranches.length <= 1) {
+        showToast("Debe quedar al menos una sucursal");
+        return;
+    }
+
+    const branch = customBranches.find(item => item.id === id);
+    if (!branch) return;
+
+    if (confirm(`¿Eliminar la sucursal "${branch.name}"?`)) {
+        customBranches = customBranches.filter(item => item.id !== id);
+        saveBranchesState();
+        if (editingBranchId === id) {
+            resetManageBranchForm();
+            manageBranchForm.style.display = 'none';
+        }
+        showToast("Sucursal eliminada");
     }
 }
 
@@ -668,7 +1128,7 @@ function removeExpenseTagById(tags, id) {
 }
 
 function saveExpenseTagsState() {
-    customExpenseTags = customExpenseTags.map((tag, index) => ({ ...tag, order: index }));
+    customExpenseTags = sortNamedListAlphabetically(customExpenseTags);
     saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
     renderExpenseTags();
     renderManageExpenseTags();
@@ -684,6 +1144,11 @@ function resetManageExpenseForm() {
 function saveManagedExpenseTag() {
     const name = manageExpenseNameInput.value.trim();
     if (!name) return;
+
+    if (hasDuplicateName(customExpenseTags, name, editingExpenseTagId)) {
+        showToast("Ese atajo ya está registrado");
+        return;
+    }
 
     if (editingExpenseTagId) {
         customExpenseTags = upsertExpenseTag(customExpenseTags, { name }, editingExpenseTagId);
@@ -709,13 +1174,9 @@ function renderManageExpenseTags() {
         div.className = 'product-manage-card';
         div.innerHTML = `
             <div style="display:flex; align-items:center; gap:0.75rem;">
-                <div style="display:flex; flex-direction:column; gap:0.25rem;">
-                    <button class="btn-icon" data-action="expense-move" data-index="${index}" data-dir="-1" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
-                    <button class="btn-icon" data-action="expense-move" data-index="${index}" data-dir="1" ${index === customExpenseTags.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
-                </div>
                 <div>
                     <div style="font-weight: 500;">${tag.name}</div>
-                    <div style="color: var(--text-muted); font-size: 0.85rem;">Atajo de gasto</div>
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">Atajo de gasto en orden alfabético</div>
                 </div>
             </div>
             <div style="display:flex; align-items:center; gap:0.5rem;">
@@ -982,6 +1443,46 @@ function setupDateStr() {
     document.getElementById('current-date-display').textContent = today.toLocaleDateString('es-ES', options);
 }
 
+function populateTransactionForm(transaction) {
+    if (!transaction) return;
+
+    const type = transaction.type === 'expense' ? 'expense' : 'income';
+    const selectedType = document.querySelector(`input[name="type"][value="${type}"]`);
+    if (selectedType) {
+        selectedType.checked = true;
+        toggleFormType(type);
+    }
+
+    const date = transaction.date ? new Date(transaction.date) : new Date();
+    if (!isNaN(date.getTime())) {
+        const tzOffset = date.getTimezoneOffset() * 60000;
+        document.getElementById('date').value = new Date(date.getTime() - tzOffset).toISOString().slice(0, 10);
+    }
+
+    totalSalesAmount.value = Number(transaction.amount) || '';
+    document.getElementById('description').value = type === 'expense' ? (transaction.desc || '') : '';
+
+    if (type === 'income') {
+        if (transaction.zone && !customBranches.some(branch => branch.name === transaction.zone)) {
+            const fallbackOption = document.createElement('option');
+            fallbackOption.value = fallbackOption.textContent = transaction.zone;
+            zoneSelect.appendChild(fallbackOption);
+        }
+        zoneSelect.value = transaction.zone || customBranches[0]?.name || '';
+
+        const itemsByName = new Map(
+            getItemsForTransaction(transaction).map(item => [item.name, Number(item.qty) || 0])
+        );
+
+        document.querySelectorAll('.product-qty').forEach(input => {
+            const id = input.id.replace('qty_', '');
+            const product = customProducts.find(prod => prod.id === id);
+            input.value = product ? (itemsByName.get(product.name) || 0) : 0;
+        });
+        calculateSubtotals();
+    }
+}
+
 // Firebase CRUD
 async function handleFormSubmit(e) {
     e.preventDefault();
@@ -1022,7 +1523,7 @@ async function handleFormSubmit(e) {
             }
         });
 
-        zone = zoneSelect.value;
+        zone = zoneSelect.value || customBranches[0]?.name || '';
         category = "Venta";
         desc = itemsSold.length > 0 ? itemsSold.join(', ') : "Venta General";
     } else {
@@ -1036,14 +1537,28 @@ async function handleFormSubmit(e) {
 
     try {
         if (!db) throw new Error("Firebase No Configurado");
-        await addDoc(collection(db, "transactions"), newTx);
+        if (editingTransactionId && !editingTransactionId.startsWith('temp_')) {
+            await updateDoc(doc(db, "transactions", editingTransactionId), newTx);
+            showToast("Registro actualizado con éxito");
+        } else if (editingTransactionId && editingTransactionId.startsWith('temp_')) {
+            transactions = transactions.map(item => item.id === editingTransactionId ? { ...item, ...newTx, id: editingTransactionId } : item);
+            saveLocalState(STORAGE_KEYS.transactions, transactions);
+            updateDashboard();
+            renderFullHistory();
+            showToast("Registro actualizado localmente");
+        } else {
+            await addDoc(collection(db, "transactions"), newTx);
+            showToast("Registro guardado con éxito");
+        }
         closeModal();
-        showToast("Registro guardado con éxito");
     } catch (err) {
         console.error("Error guardando:", err);
         showToast("Guardado localmente. Revisar Firebase.");
-        newTx.id = "temp_" + Date.now();
-        transactions.push(newTx);
+        newTx.id = editingTransactionId || ("temp_" + Date.now());
+        const exists = transactions.some(item => item.id === newTx.id);
+        transactions = exists
+            ? transactions.map(item => item.id === newTx.id ? newTx : item)
+            : [...transactions, newTx];
         saveLocalState(STORAGE_KEYS.transactions, transactions);
         updateDashboard();
         renderFullHistory();
@@ -1085,6 +1600,12 @@ window.deleteTransaction = async (id) => {
             console.error(e);
         }
     }
+};
+
+window.editTransaction = (id) => {
+    const transaction = transactions.find(item => item.id === id);
+    if (!transaction) return;
+    openModal(transaction);
 };
 
 // Data Processing & Rendering
@@ -1157,6 +1678,7 @@ function updateDashboard() {
 
     updateCharts(data);
     renderTopSellers(data);
+    renderBranchSalesSummary(data);
 }
 
 function getItemsForTransaction(transaction) {
@@ -1300,6 +1822,24 @@ function renderTopSellers(data) {
     });
 }
 
+function renderBranchSalesSummary(data) {
+    if (!branchSalesList) return;
+
+    const salesByBranch = customBranches.map(branch => ({
+        name: branch.name,
+        total: data
+            .filter(item => item.type === 'income' && item.zone === branch.name)
+            .reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+    }));
+
+    branchSalesList.innerHTML = salesByBranch.map(branch => `
+        <div class="branch-sales-item">
+            <span>${branch.name}</span>
+            <strong>${formatMoney(branch.total)}</strong>
+        </div>
+    `).join('');
+}
+
 function createRow(t, showDelete = true) {
     const tr = document.createElement('tr');
 
@@ -1328,7 +1868,7 @@ function createRow(t, showDelete = true) {
         <td class="align-right" style="font-weight: 600; color: var(--${t.type === 'income' ? 'success' : 'danger'})">
             ${sign}${formatMoney(t.amount)}
         </td>
-        ${showDelete ? `<td><button class="btn-text" onclick="deleteTransaction('${t.id}')"><i class="ph ph-trash"></i></button></td>` : ''}
+        ${showDelete ? `<td><div class="history-actions"><button class="btn-text" onclick="editTransaction('${t.id}')" title="Editar"><i class="ph ph-pencil-simple"></i></button><button class="btn-text" onclick="deleteTransaction('${t.id}')" title="Eliminar"><i class="ph ph-trash"></i></button></div></td>` : ''}
     `;
     return tr;
 }
@@ -1410,20 +1950,24 @@ function updateCharts(data) {
 
     const totalInc = data.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
     const totalExp = data.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
-    const totalCombined = totalInc + totalExp || 1;
+    const branchBreakdown = customBranches
+        .map(branch => ({
+            name: branch.name,
+            total: data
+                .filter(item => item.type === 'income' && item.zone === branch.name)
+                .reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+        }))
+        .filter(item => item.total > 0);
 
-    const pctInc = ((totalInc / totalCombined) * 100).toFixed(1);
-    const pctExp = ((totalExp / totalCombined) * 100).toFixed(1);
-
-    if (totalInc === 0 && totalExp === 0) {
+    if (branchBreakdown.length === 0) {
         charts.category.data = { labels: ['Sin datos'], datasets: [{ data: [1], backgroundColor: ['#334155'], borderWidth: 0 }] };
         document.getElementById('balance-stats-container').innerHTML = '';
     } else {
         charts.category.data = {
-            labels: ['Ingresos', 'Gastos'],
+            labels: branchBreakdown.map(item => item.name),
             datasets: [{
-                data: [totalInc, totalExp],
-                backgroundColor: ['#10b981', '#ef4444'],
+                data: branchBreakdown.map(item => item.total),
+                backgroundColor: ['#10b981', '#0ea5e9', '#f59e0b', '#f97316', '#8b5cf6', '#14b8a6'],
                 borderWidth: 0
             }]
         };
@@ -1435,14 +1979,14 @@ function updateCharts(data) {
         document.getElementById('balance-stats-container').innerHTML = `
             <div class="balance-stats">
                 <div class="balance-stat-item income">
-                    <span class="label">Ventas</span>
-                    <span class="value">${pctInc}%</span>
-                    <span style="font-size:0.8rem">${formatMoney(totalInc)}</span>
+                    <span class="label">Ventas Totales</span>
+                    <span class="value">${formatMoney(totalInc)}</span>
+                    <span style="font-size:0.8rem">${branchBreakdown.length} sucursales con ventas</span>
                 </div>
                 <div class="balance-stat-item expense">
                     <span class="label">Gastos</span>
-                    <span class="value">${pctExp}%</span>
-                    <span style="font-size:0.8rem">${formatMoney(totalExp)}</span>
+                    <span class="value">${formatMoney(totalExp)}</span>
+                    <span style="font-size:0.8rem">Total del periodo</span>
                 </div>
             </div>
             <div class="balance-result ${diffClass}">
@@ -1457,6 +2001,19 @@ document.addEventListener('DOMContentLoaded', init);
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
+        const isLocalDevHost = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+
+        if (isLocalDevHost) {
+            navigator.serviceWorker.getRegistrations()
+                .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+                .then(() => caches.keys())
+                .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+                .catch((error) => {
+                    console.warn('No se pudieron limpiar los service workers locales:', error);
+                });
+            return;
+        }
+
         navigator.serviceWorker.register('./sw.js').catch((error) => {
             console.warn('No se pudo registrar el service worker:', error);
         });

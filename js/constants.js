@@ -1,5 +1,7 @@
 export const INITIAL_ZONES = ["Universidad", "La Presa", "Noria Alta"];
 
+export const INITIAL_CATEGORIES = ["Hamburguesas", "Snacks", "Otros"];
+
 export const INITIAL_PRODUCTS = [
     { id: 'h_esp', name: 'Hamburguesa Especial', category: 'Hamburguesas', price: 70 },
     { id: 'h_pol', name: 'Hamburguesa de Pollo', category: 'Hamburguesas', price: 70 },

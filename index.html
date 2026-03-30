@@ -33,7 +33,12 @@
             <h2>Acceso Administrativo</h2>
             <p>Por favor ingresa tu contraseña para ver los datos del negocio.</p>
             <form id="login-form">
-                <input type="password" id="login-password" placeholder="Ingresa la contraseña" required>
+                <div class="password-field">
+                    <input type="password" id="login-password" placeholder="Ingresa la contraseña" required>
+                    <button type="button" class="password-toggle" id="toggle-login-password" aria-label="Mostrar u ocultar contraseña">
+                        <i class="ph ph-eye"></i>
+                    </button>
+                </div>
                 <button type="submit" class="submit-btn" style="margin-top: 1rem;">Entrar al Panel</button>
             </form>
             <p id="login-error" style="color: var(--danger); font-size: 0.8rem; display: none; margin-top: 1rem;">Contraseña incorrecta</p>
@@ -132,6 +137,7 @@
                             <canvas id="categoryChart"></canvas>
                         </div>
                         <div id="balance-stats-container"></div>
+                        <div id="branch-sales-list" class="branch-sales-list"></div>
                     </div>
                 </section>
                 
@@ -236,15 +242,41 @@
                             <input type="number" id="manage-prod-price" placeholder="Precio ($)" min="0" step="0.5">
                         </div>
                         <div style="display: flex; gap: 0.5rem;">
-                            <select id="manage-prod-cat" style="flex-grow: 1;">
-                                <option value="Hamburguesas">Hamburguesas</option>
-                                <option value="Snacks">Snacks</option>
-                                <option value="Otros">Otros</option>
-                            </select>
+                                <select id="manage-prod-cat" style="flex-grow: 1;"></select>
                             <button type="button" id="manage-save-product" style="background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer;">Guardar</button>
                         </div>
                     </div>
                     <div id="manage-products-list">
+                        <!-- js injected -->
+                    </div>
+                </section>
+                <section class="recent-transactions full-height">
+                    <div class="section-header">
+                        <h3>Categorías de Productos</h3>
+                        <button class="btn-text" id="btn-add-category-manage"><i class="ph ph-plus"></i> Nueva Categoría</button>
+                    </div>
+                    <div id="manage-new-category-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--warning);">
+                        <div style="display: grid; grid-template-columns: 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <input type="text" id="manage-category-name" placeholder="Nombre (Ej. Snacks, Bebidas)">
+                        </div>
+                        <button type="button" id="manage-save-category" style="background: var(--success); color: white; border: none; padding: 0.75rem 1rem; border-radius: 6px; cursor: pointer; width: 100%;">Guardar</button>
+                    </div>
+                    <div id="manage-categories-list">
+                        <!-- js injected -->
+                    </div>
+                </section>
+                <section class="recent-transactions full-height">
+                    <div class="section-header">
+                        <h3>Sucursales / Lugares de Venta</h3>
+                        <button class="btn-text" id="btn-add-branch-manage"><i class="ph ph-plus"></i> Nueva Sucursal</button>
+                    </div>
+                    <div id="manage-new-branch-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--primary);">
+                        <div style="display: grid; grid-template-columns: 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <input type="text" id="manage-branch-name" placeholder="Nombre (Ej. Universidad)">
+                        </div>
+                        <button type="button" id="manage-save-branch" style="background: var(--success); color: white; border: none; padding: 0.75rem 1rem; border-radius: 6px; cursor: pointer; width: 100%;">Guardar</button>
+                    </div>
+                    <div id="manage-branches-list">
                         <!-- js injected -->
                     </div>
                 </section>
@@ -271,7 +303,7 @@
     <div class="modal-overlay" id="transaction-modal">
         <div class="modal">
             <div class="modal-header">
-                <h2>Registrar Movimiento</h2>
+                <h2 id="transaction-modal-title">Registrar Movimiento</h2>
                 <button class="close-btn" id="close-modal"><i class="ph ph-x"></i></button>
             </div>
             <form id="transaction-form">
@@ -308,11 +340,7 @@
                                 <input type="number" id="new-prod-price" placeholder="Precio ($)" min="0" step="0.5">
                             </div>
                             <div style="display: flex; gap: 0.5rem;">
-                                <select id="new-prod-cat" style="flex-grow: 1;">
-                                    <option value="Hamburguesas">Hamburguesas</option>
-                                    <option value="Snacks">Snacks</option>
-                                    <option value="Otros">Otros</option>
-                                </select>
+                                <select id="new-prod-cat" style="flex-grow: 1;"></select>
                                 <button type="button" id="save-new-product" style="background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer;">Guardar</button>
                             </div>
                         </div>

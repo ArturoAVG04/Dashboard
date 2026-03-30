@@ -1,5 +1,5 @@
 const AUTH_SESSION_KEY = 'dashboardAuthenticatedAt';
-const AUTH_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PASSWORD_HASH = 'bade41f7736f487f882dacc0c7b71028c331d73058214d51a88d08091303e5a5';
 
 async function sha256Hex(value) {
@@ -15,30 +15,30 @@ export async function authenticate(password) {
     const isValid = hash === PASSWORD_HASH;
 
     if (isValid) {
-        sessionStorage.setItem(AUTH_SESSION_KEY, Date.now().toString());
+        localStorage.setItem(AUTH_SESSION_KEY, Date.now().toString());
     }
 
     return isValid;
 }
 
 export function isAuthenticated() {
-    const rawTimestamp = sessionStorage.getItem(AUTH_SESSION_KEY);
+    const rawTimestamp = localStorage.getItem(AUTH_SESSION_KEY);
     if (!rawTimestamp) return false;
 
     const timestamp = Number(rawTimestamp);
     if (!Number.isFinite(timestamp)) {
-        sessionStorage.removeItem(AUTH_SESSION_KEY);
+        localStorage.removeItem(AUTH_SESSION_KEY);
         return false;
     }
 
     const isValid = (Date.now() - timestamp) < AUTH_SESSION_TTL_MS;
     if (!isValid) {
-        sessionStorage.removeItem(AUTH_SESSION_KEY);
+        localStorage.removeItem(AUTH_SESSION_KEY);
     }
 
     return isValid;
 }
 
 export function clearAuthentication() {
-    sessionStorage.removeItem(AUTH_SESSION_KEY);
+    localStorage.removeItem(AUTH_SESSION_KEY);
 }

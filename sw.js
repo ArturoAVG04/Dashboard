@@ -1,4 +1,4 @@
-const CACHE_NAME = 'dashboard-la-barra-v1';
+const CACHE_NAME = 'dashboard-la-barra-v3';
 const APP_ASSETS = [
     './',
     './index.html',
@@ -36,6 +36,24 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
     if (event.request.method !== 'GET') return;
+
+    const isNavigationRequest = event.request.mode === 'navigate';
+    const isHtmlRequest = event.request.headers.get('accept')?.includes('text/html');
+
+    if (isNavigationRequest || isHtmlRequest) {
+        event.respondWith(
+            fetch(event.request)
+                .then((networkResponse) => {
+                    const responseClone = networkResponse.clone();
+                    caches.open(CACHE_NAME).then((cache) => {
+                        cache.put(event.request, responseClone);
+                    });
+                    return networkResponse;
+                })
+                .catch(() => caches.match(event.request).then((cached) => cached || caches.match('./index.html')))
+        );
+        return;
+    }
 
     event.respondWith(
         caches.match(event.request).then((cachedResponse) => {
