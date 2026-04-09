@@ -674,6 +674,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     .sale-summary-card { position: static; }
     #sale-modal {
         align-items: stretch;
+        padding: 0 !important;
     }
     .sale-modal {
         max-width: 100% !important;
