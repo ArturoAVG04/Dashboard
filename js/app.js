@@ -132,6 +132,7 @@ const saleCloseTableBtn = document.getElementById('sale-close-table-btn');
 const saleTableBanner = document.getElementById('sale-table-banner');
 const saleMobileSwitch = document.getElementById('sale-mobile-switch');
 const saleLayout = document.querySelector('.sale-layout');
+const mobileSaleSummary = document.getElementById('mobile-sale-summary');
 
 function createEmptySaleDraft(overrides = {}) {
     return {
@@ -678,6 +679,32 @@ function setupEventListeners() {
 
     if (btnRefreshTables) {
         btnRefreshTables.addEventListener('click', renderTablesView);
+    }
+
+    if (saleProductsGrid) {
+        saleProductsGrid.addEventListener('click', (e) => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            
+            const productId = btn.dataset.productId;
+            const action = btn.dataset.action;
+            
+            if (action === 'add' || !action) {
+                addItemToCurrentSale(productId);
+            } else if (action === 'increase') {
+                updateCurrentSaleItemQty(productId, 1);
+            } else if (action === 'decrease') {
+                updateCurrentSaleItemQty(productId, -1);
+            }
+        });
+    }
+
+    if (mobileSaleSummary) {
+        mobileSaleSummary.addEventListener('click', (e) => {
+            if (e.target.closest('.mobile-summary-btn')) {
+                setSaleMobilePanel('order');
+            }
+        });
     }
 
     typeSelectors.forEach(radio => {
@@ -1754,6 +1781,10 @@ function setSaleMobilePanel(panel = 'menu') {
     saleMobileSwitch.querySelectorAll('[data-sale-panel]').forEach(button => {
         button.classList.toggle('active', button.dataset.salePanel === panel);
     });
+
+    if (mobileSaleSummary) {
+        mobileSaleSummary.style.display = (panel === 'menu' && saleDraft.items.length > 0) ? 'flex' : 'none';
+    }
 }
 
 function startNewSale() {
@@ -1827,16 +1858,30 @@ function renderSaleProducts() {
         return;
     }
 
-    saleProductsGrid.innerHTML = products.map(product => `
-        <article class="sale-product-card">
-            <div class="category">${product.category}</div>
-            <h4>${product.name}</h4>
-            <div class="price">${formatMoney(product.price)}</div>
-            <button type="button" class="submit-btn" data-product-id="${product.id}" style="margin-top:auto;">
-                <i class="ph ph-plus"></i> Agregar
-            </button>
-        </article>
-    `).join('');
+    saleProductsGrid.innerHTML = products.map(product => {
+        const draftItem = saleDraft.items.find(item => item.productId === product.id);
+        const qty = draftItem ? draftItem.qty : 0;
+
+        return `
+            <article class="sale-product-card">
+                <div class="category">${product.category}</div>
+                <h4>${product.name}</h4>
+                <div class="price">${formatMoney(product.price)}</div>
+                
+                ${qty > 0 ? `
+                    <div class="sale-product-controls">
+                        <button type="button" class="qty-btn" data-product-id="${product.id}" data-action="decrease">-</button>
+                        <span class="qty-num">${qty}</span>
+                        <button type="button" class="qty-btn" data-product-id="${product.id}" data-action="increase">+</button>
+                    </div>
+                ` : `
+                    <button type="button" class="submit-btn" data-product-id="${product.id}" data-action="add">
+                        <i class="ph ph-plus"></i> Agregar
+                    </button>
+                `}
+            </article>
+        `;
+    }).join('');
 }
 
 function renderSaleSummary() {
@@ -1850,6 +1895,7 @@ function renderSaleSummary() {
     if (saleDraft.items.length === 0) {
         saleOrderItems.innerHTML = `<div class="card" style="padding: 1rem; text-align:center; color:var(--text-muted);">Todavía no agregas productos.</div>`;
         updateSaleModalMeta();
+        updateMobileSaleSummary();
         return;
     }
 
@@ -1869,6 +1915,34 @@ function renderSaleSummary() {
     `).join('');
 
     updateSaleModalMeta();
+    updateMobileSaleSummary();
+}
+
+function updateMobileSaleSummary() {
+    if (!mobileSaleSummary) return;
+
+    if (saleDraft.items.length === 0) {
+        mobileSaleSummary.style.display = 'none';
+        return;
+    }
+
+    const totalItems = saleDraft.items.reduce((sum, item) => sum + item.qty, 0);
+    const isMenuPanel = !saleLayout.classList.contains('show-order');
+
+    if (isMenuPanel) {
+        mobileSaleSummary.style.display = 'flex';
+        mobileSaleSummary.innerHTML = `
+            <div class="mobile-summary-info">
+                <span class="mobile-summary-total">${formatMoney(saleDraft.total)}</span>
+                <span class="mobile-summary-count">${totalItems} items en pedido</span>
+            </div>
+            <button type="button" class="mobile-summary-btn">
+                Ver Pedido <i class="ph ph-arrow-right"></i>
+            </button>
+        `;
+    } else {
+        mobileSaleSummary.style.display = 'none';
+    }
 }
 
 function syncSaleDraftTotal() {
@@ -1903,6 +1977,7 @@ function addItemToCurrentSale(productId) {
     syncSaleDraftTotal();
     persistActiveSaleDraft();
     renderSaleSummary();
+    renderSaleProducts();
     showToast(`+1 ${product.name}`);
 }
 
@@ -1914,6 +1989,7 @@ function updateCurrentSaleItemQty(productId, delta) {
     syncSaleDraftTotal();
     persistActiveSaleDraft();
     renderSaleSummary();
+    renderSaleProducts();
 }
 
 function removeItemFromCurrentSale(productId) {
@@ -1921,6 +1997,7 @@ function removeItemFromCurrentSale(productId) {
     syncSaleDraftTotal();
     persistActiveSaleDraft();
     renderSaleSummary();
+    renderSaleProducts();
 }
 
 function handleSaleTotalInput() {
