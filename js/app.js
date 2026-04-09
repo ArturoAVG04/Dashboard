@@ -9,10 +9,11 @@ import { groupProductsByCategory, upsertProduct, moveProductInList, removeProduc
 let transactions = loadLocalState(STORAGE_KEYS.transactions, []);
 let currentFilter = 'day'; // Match UI default
 let charts = { main: null, category: null };
-let customProducts = loadLocalState(STORAGE_KEYS.products, INITIAL_PRODUCTS);
+let customProducts = normalizeProducts(loadLocalState(STORAGE_KEYS.products, INITIAL_PRODUCTS));
 let customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS)));
 let customBranches = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.branches, INITIAL_ZONES), 'branch'));
 let customCategories = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.categories, INITIAL_CATEGORIES), 'cat'));
+let openTables = normalizeOpenTables(loadLocalState(STORAGE_KEYS.openTables, []));
 
 let customStartDate = null;
 let customEndDate = null;
@@ -26,10 +27,14 @@ let isSyncingProducts = false;
 let isSyncingExpenseTags = false;
 let isSyncingBranches = false;
 let isSyncingCategories = false;
+let isSyncingTables = false;
+let saleDraft = createEmptySaleDraft();
+let activeSaleContext = { mode: 'sale', tableId: null };
 
 // DOM Elements
 const views = {
     dashboard: document.getElementById('view-dashboard'),
+    tables: document.getElementById('view-tables'),
     transactions: document.getElementById('view-transactions'),
     products: document.getElementById('view-products'),
     backup: document.getElementById('view-backup')
@@ -37,6 +42,7 @@ const views = {
 
 const navBtns = {
     dashboard: document.getElementById('nav-dashboard'),
+    tables: document.getElementById('nav-tables'),
     transactions: document.getElementById('nav-transactions'),
     products: document.getElementById('nav-products'),
     backup: document.getElementById('nav-backup')
@@ -44,7 +50,8 @@ const navBtns = {
 
 const modal = document.getElementById('transaction-modal');
 const form = document.getElementById('transaction-form');
-const btnNewTx = document.getElementById('btn-new-transaction');
+const btnNewSale = document.getElementById('btn-new-sale');
+const btnNewExpense = document.getElementById('btn-new-expense');
 const btnCloseModal = document.getElementById('close-modal');
 const btnViewAll = document.getElementById('btn-view-all');
 
@@ -89,6 +96,7 @@ const manageCategoryInput = document.getElementById('manage-prod-cat');
 const modalProductCategoryInput = document.getElementById('new-prod-cat');
 const btnManageSaveProd = document.getElementById('manage-save-product');
 const manageProductsList = document.getElementById('manage-products-list');
+const manageProductBranches = document.getElementById('manage-product-branches');
 const manageExpenseForm = document.getElementById('manage-new-expense-form');
 const manageExpenseNameInput = document.getElementById('manage-exp-name');
 const btnAddExpenseManage = document.getElementById('btn-add-expense-manage');
@@ -101,10 +109,97 @@ const btnManageSaveCategory = document.getElementById('manage-save-category');
 const manageCategoriesList = document.getElementById('manage-categories-list');
 const manageBranchForm = document.getElementById('manage-new-branch-form');
 const manageBranchNameInput = document.getElementById('manage-branch-name');
+const manageBranchUseTables = document.getElementById('manage-branch-use-tables');
 const btnAddBranchManage = document.getElementById('btn-add-branch-manage');
 const btnManageSaveBranch = document.getElementById('manage-save-branch');
 const manageBranchesList = document.getElementById('manage-branches-list');
 const modalTitle = document.getElementById('transaction-modal-title');
+const tablesGrid = document.getElementById('tables-grid');
+const tablesBranchFilter = document.getElementById('tables-branch-filter');
+const btnRefreshTables = document.getElementById('btn-refresh-tables');
+const saleModal = document.getElementById('sale-modal');
+const closeSaleModalBtn = document.getElementById('close-sale-modal');
+const saleModalTitle = document.getElementById('sale-modal-title');
+const saleModalSubtitle = document.getElementById('sale-modal-subtitle');
+const saleBranchSelect = document.getElementById('sale-branch-select');
+const saleProductsGrid = document.getElementById('sale-products-grid');
+const saleOrderItems = document.getElementById('sale-order-items');
+const saleItemsCount = document.getElementById('sale-items-count');
+const saleTotalInput = document.getElementById('sale-total-input');
+const saleTotalDisplay = document.getElementById('sale-total-display');
+const salePrimaryAction = document.getElementById('sale-primary-action');
+const saleCloseTableBtn = document.getElementById('sale-close-table-btn');
+const saleTableBanner = document.getElementById('sale-table-banner');
+
+function createEmptySaleDraft(overrides = {}) {
+    return {
+        branchId: '',
+        items: [],
+        total: 0,
+        ...overrides
+    };
+}
+
+function normalizeProduct(product, index = 0) {
+    return {
+        ...product,
+        id: product.id || `p_${index}_${Date.now()}`,
+        price: Number(product.price) || 0,
+        category: product.category || 'General',
+        availableInBranches: Array.isArray(product.availableInBranches)
+            ? product.availableInBranches.filter(Boolean)
+            : []
+    };
+}
+
+function normalizeProducts(products) {
+    return (products || []).map((product, index) => normalizeProduct(product, index));
+}
+
+function normalizeTable(table, index = 0) {
+    const items = Array.isArray(table.items)
+        ? table.items.map(item => ({
+            productId: item.productId || '',
+            name: item.name || 'Producto',
+            price: Number(item.price) || 0,
+            qty: Number(item.qty) || 0
+        })).filter(item => item.qty > 0)
+        : [];
+
+    return {
+        id: table.id || `table_${Date.now()}_${index}`,
+        branchId: table.branchId || '',
+        name: table.name || `Mesa ${index + 1}`,
+        items,
+        total: typeof table.total === 'number' ? table.total : getItemsTotal(items),
+        status: table.status || 'open',
+        createdAt: table.createdAt || new Date().toISOString()
+    };
+}
+
+function normalizeOpenTables(tables) {
+    return (tables || []).map((table, index) => normalizeTable(table, index))
+        .filter(table => table.status === 'open');
+}
+
+function getItemsTotal(items) {
+    return items.reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.qty) || 0)), 0);
+}
+
+function getBranchById(branchId) {
+    return customBranches.find(branch => branch.id === branchId) || null;
+}
+
+function getBranchNameById(branchId) {
+    return getBranchById(branchId)?.name || '';
+}
+
+function productAvailableInBranch(product, branchId) {
+    if (!product || !branchId) return true;
+    return !Array.isArray(product.availableInBranches)
+        || product.availableInBranches.length === 0
+        || product.availableInBranches.includes(branchId);
+}
 
 // Init App
 function init() {
@@ -137,6 +232,10 @@ function init() {
     renderManageBranches();
     renderManageProducts();
     renderManageExpenseTags();
+    renderManageProductBranchOptions();
+    renderTablesBranchFilter();
+    renderTablesView();
+    renderSaleBranchOptions();
 
     // Auth Check
     if (isAuthenticated()) {
@@ -159,6 +258,7 @@ function unlockApp() {
     subscribeExpenseTags();
     subscribeBranches();
     subscribeCategories();
+    subscribeOpenTables();
 }
 
 async function syncProductsToCloud() {
@@ -178,6 +278,7 @@ async function syncProductsToCloud() {
                 name: product.name,
                 price: product.price,
                 category: product.category,
+                availableInBranches: Array.isArray(product.availableInBranches) ? product.availableInBranches : [],
                 order: index
             });
         });
@@ -242,7 +343,7 @@ async function syncBranchesToCloud() {
 
         customBranches.forEach((branch, index) => {
             const ref = doc(db, "dashboard_branches", branch.id);
-            batch.set(ref, { name: branch.name, order: index });
+            batch.set(ref, { name: branch.name, useTables: Boolean(branch.useTables), order: index });
         });
 
         existingIds.forEach(id => {
@@ -256,6 +357,35 @@ async function syncBranchesToCloud() {
         console.warn("No se pudieron sincronizar las sucursales:", error);
     } finally {
         isSyncingBranches = false;
+    }
+}
+
+async function syncOpenTablesToCloud() {
+    if (!db || isSyncingTables) return;
+
+    isSyncingTables = true;
+    try {
+        const collectionRef = collection(db, "dashboard_tables");
+        const existingSnapshot = await getDocs(collectionRef);
+        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
+        const nextIds = new Set(openTables.map(item => item.id));
+        const batch = writeBatch(db);
+
+        openTables.forEach((table) => {
+            batch.set(doc(db, "dashboard_tables", table.id), normalizeTable(table));
+        });
+
+        existingIds.forEach(id => {
+            if (!nextIds.has(id)) {
+                batch.delete(doc(db, "dashboard_tables", id));
+            }
+        });
+
+        await batch.commit();
+    } catch (error) {
+        console.warn("No se pudieron sincronizar las mesas:", error);
+    } finally {
+        isSyncingTables = false;
     }
 }
 
@@ -302,10 +432,11 @@ function subscribeProducts() {
         customProducts = snapshot.docs.map(item => ({
             id: item.id,
             ...item.data()
-        }));
+        })).map((product, index) => normalizeProduct(product, index));
         saveLocalState(STORAGE_KEYS.products, customProducts);
         renderProductsList();
         renderManageProducts();
+        renderSaleProducts();
     }, (error) => {
         console.warn("No se pudieron leer los productos desde Firebase:", error);
     });
@@ -350,6 +481,11 @@ function subscribeBranches() {
         saveLocalState(STORAGE_KEYS.branches, customBranches);
         initFormZones();
         renderManageBranches();
+        renderManageProductBranchOptions();
+        renderTablesBranchFilter();
+        renderSaleBranchOptions();
+        renderSaleProducts();
+        renderTablesView();
         updateDashboard();
     }, (error) => {
         console.warn("No se pudieron leer las sucursales desde Firebase:", error);
@@ -377,6 +513,27 @@ function subscribeCategories() {
         renderManageProducts();
     }, (error) => {
         console.warn("No se pudieron leer las categorías desde Firebase:", error);
+    });
+}
+
+function subscribeOpenTables() {
+    if (!db) return;
+
+    const tablesQuery = query(collection(db, "dashboard_tables"), orderBy("createdAt", "asc"));
+    onSnapshot(tablesQuery, async (snapshot) => {
+        if (snapshot.empty) {
+            await syncOpenTablesToCloud();
+            return;
+        }
+
+        openTables = normalizeOpenTables(snapshot.docs.map(item => ({
+            id: item.id,
+            ...item.data()
+        })));
+        saveLocalState(STORAGE_KEYS.openTables, openTables);
+        renderTablesView();
+    }, (error) => {
+        console.warn("No se pudieron leer las mesas desde Firebase:", error);
     });
 }
 
@@ -408,15 +565,22 @@ function normalizeNamedList(items, prefix) {
             return {
                 id: `${prefix}_${index}_${item.toLowerCase().replace(/\s+/g, '_')}`,
                 name: item,
-                order: index
+                order: index,
+                ...(prefix === 'branch' ? { useTables: false } : {})
             };
         }
 
-        return {
+        const normalizedItem = {
             id: item.id || `${prefix}_${index}_${(item.name || '').toLowerCase().replace(/\s+/g, '_')}`,
             name: item.name || '',
             order: typeof item.order === 'number' ? item.order : index
         };
+
+        if (prefix === 'branch') {
+            normalizedItem.useTables = Boolean(item.useTables);
+        }
+
+        return normalizedItem;
     }).filter(item => item.name);
 }
 
@@ -477,6 +641,7 @@ function setupEventListeners() {
 
     // Navigation
     navBtns.dashboard.addEventListener('click', () => switchView('dashboard'));
+    navBtns.tables.addEventListener('click', () => switchView('tables'));
     navBtns.transactions.addEventListener('click', () => switchView('transactions'));
     navBtns.products.addEventListener('click', () => switchView('products'));
     navBtns.backup.addEventListener('click', () => switchView('backup'));
@@ -487,8 +652,22 @@ function setupEventListeners() {
     document.getElementById('btn-export-csv').addEventListener('click', downloadCSV);
 
     // Modal
-    btnNewTx.addEventListener('click', () => openModal());
+    btnNewSale.addEventListener('click', () => startNewSale());
+    btnNewExpense.addEventListener('click', () => openExpenseModal());
     btnCloseModal.addEventListener('click', () => closeModal());
+    closeSaleModalBtn.addEventListener('click', () => closeSaleModal());
+    saleBranchSelect.addEventListener('change', handleSaleBranchChange);
+    saleTotalInput.addEventListener('input', handleSaleTotalInput);
+    salePrimaryAction.addEventListener('click', handleSalePrimaryAction);
+    saleCloseTableBtn.addEventListener('click', handleCloseActiveTable);
+
+    if (tablesBranchFilter) {
+        tablesBranchFilter.addEventListener('change', renderTablesView);
+    }
+
+    if (btnRefreshTables) {
+        btnRefreshTables.addEventListener('click', renderTablesView);
+    }
 
     typeSelectors.forEach(radio => {
         radio.addEventListener('change', (e) => toggleFormType(e.target.value));
@@ -675,6 +854,44 @@ function setupEventListeners() {
             }
         });
     }
+
+    if (tablesGrid) {
+        tablesGrid.addEventListener('click', (event) => {
+            const actionButton = event.target.closest('[data-table-action]');
+            if (!actionButton) return;
+
+            const { tableAction, id } = actionButton.dataset;
+
+            if (tableAction === 'edit') {
+                openTableEditor(id);
+            }
+
+            if (tableAction === 'charge') {
+                closeTable(id);
+            }
+        });
+    }
+
+    if (saleProductsGrid) {
+        saleProductsGrid.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-product-id]');
+            if (!button) return;
+            addItemToCurrentSale(button.dataset.productId);
+        });
+    }
+
+    if (saleOrderItems) {
+        saleOrderItems.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-sale-action]');
+            if (!button) return;
+
+            const { saleAction, id } = button.dataset;
+
+            if (saleAction === 'increase') updateCurrentSaleItemQty(id, 1);
+            if (saleAction === 'decrease') updateCurrentSaleItemQty(id, -1);
+            if (saleAction === 'remove') removeItemFromCurrentSale(id);
+        });
+    }
 }
 
 function switchView(viewName) {
@@ -685,12 +902,14 @@ function switchView(viewName) {
     navBtns[viewName].classList.add('active');
 
     if (viewName === 'dashboard') updateDashboard();
+    if (viewName === 'tables') renderTablesView();
     if (viewName === 'transactions') renderFullHistory();
     if (viewName === 'products') {
         renderManageProducts();
         renderManageExpenseTags();
         renderManageCategories();
         renderManageBranches();
+        renderManageProductBranchOptions();
     }
 }
 
@@ -732,6 +951,67 @@ function initFormZones() {
         o.value = o.textContent = branch.name;
         zoneSelect.appendChild(o);
     });
+}
+
+function renderSaleBranchOptions() {
+    if (!saleBranchSelect) return;
+
+    const selectedBranchId = saleDraft.branchId;
+    saleBranchSelect.innerHTML = '';
+
+    customBranches.forEach(branch => {
+        const option = document.createElement('option');
+        option.value = branch.id;
+        option.textContent = branch.name;
+        saleBranchSelect.appendChild(option);
+    });
+
+    if (customBranches.some(branch => branch.id === selectedBranchId)) {
+        saleBranchSelect.value = selectedBranchId;
+    } else if (customBranches[0]) {
+        saleBranchSelect.value = customBranches[0].id;
+        saleDraft.branchId = customBranches[0].id;
+    }
+}
+
+function renderTablesBranchFilter() {
+    if (!tablesBranchFilter) return;
+
+    const selectedValue = tablesBranchFilter.value;
+    tablesBranchFilter.innerHTML = '<option value="">Todas las sucursales</option>';
+
+    customBranches.filter(branch => branch.useTables).forEach(branch => {
+        const option = document.createElement('option');
+        option.value = branch.id;
+        option.textContent = branch.name;
+        tablesBranchFilter.appendChild(option);
+    });
+
+    tablesBranchFilter.value = Array.from(tablesBranchFilter.options).some(option => option.value === selectedValue)
+        ? selectedValue
+        : '';
+}
+
+function renderManageProductBranchOptions(selectedBranchIds = null) {
+    if (!manageProductBranches) return;
+
+    const selected = new Set(Array.isArray(selectedBranchIds) ? selectedBranchIds : []);
+    manageProductBranches.innerHTML = '';
+
+    customBranches.forEach(branch => {
+        const label = document.createElement('label');
+        label.className = 'inline-checkbox';
+        label.innerHTML = `
+            <input type="checkbox" value="${branch.id}" ${selected.has(branch.id) ? 'checked' : ''}>
+            <span>${branch.name}</span>
+        `;
+        manageProductBranches.appendChild(label);
+    });
+}
+
+function getSelectedManageProductBranches() {
+    return Array.from(manageProductBranches?.querySelectorAll('input[type="checkbox"]:checked') || [])
+        .map(input => input.value);
 }
 
 function renderCategoryOptions() {
@@ -817,6 +1097,7 @@ function renderManageProducts() {
                 <div>
                     <div style="font-weight: 500;">${p.name} <small style="color:var(--text-muted)">(${p.category})</small></div>
                     <div style="color: var(--success); font-size: 0.9rem;">$${p.price}</div>
+                    <div style="color: var(--text-muted); font-size: 0.8rem;">${Array.isArray(p.availableInBranches) && p.availableInBranches.length > 0 ? `${p.availableInBranches.length} sucursales asignadas` : 'Disponible en todas las sucursales'}</div>
                 </div>
             </div>
             <div style="display:flex; align-items:center; gap:0.5rem;">
@@ -829,10 +1110,11 @@ function renderManageProducts() {
 }
 
 function saveProductsState() {
-    customProducts = customProducts.map((product, index) => ({ ...product, order: index }));
+    customProducts = customProducts.map((product, index) => ({ ...normalizeProduct(product, index), order: index }));
     saveLocalState(STORAGE_KEYS.products, customProducts);
     renderManageProducts();
     renderProductsList();
+    renderSaleProducts();
     syncProductsToCloud();
 }
 
@@ -870,6 +1152,11 @@ function saveBranchesState() {
     saveLocalState(STORAGE_KEYS.branches, customBranches);
     initFormZones();
     renderManageBranches();
+    renderManageProductBranchOptions();
+    renderTablesBranchFilter();
+    renderSaleBranchOptions();
+    renderSaleProducts();
+    renderTablesView();
     updateDashboard();
     syncBranchesToCloud();
 }
@@ -889,6 +1176,7 @@ function resetManageProductForm() {
     manageNameInput.value = '';
     managePriceInput.value = '';
     manageCategoryInput.value = customCategories[0]?.name || '';
+    renderManageProductBranchOptions();
     btnManageSaveProd.textContent = 'Guardar';
 }
 
@@ -896,14 +1184,15 @@ function saveManagedProduct() {
     const name = manageNameInput.value.trim();
     const price = parseFloat(managePriceInput.value);
     const category = manageCategoryInput.value;
+    const availableInBranches = getSelectedManageProductBranches();
 
     if (!name || isNaN(price)) return;
 
     if (editingProductId) {
-        customProducts = upsertProduct(customProducts, { name, price, category }, editingProductId);
+        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches }, editingProductId);
         showToast("Producto actualizado");
     } else {
-        customProducts = upsertProduct(customProducts, { name, price, category });
+        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches });
         showToast("Producto guardado");
     }
 
@@ -922,7 +1211,8 @@ function upsertNamedItem(items, payload, prefix, currentId = null) {
         {
             id: `${prefix}_${Date.now()}`,
             name: payload.name,
-            order: items.length
+            order: items.length,
+            ...(prefix === 'branch' ? { useTables: Boolean(payload.useTables) } : {})
         }
     ];
 }
@@ -940,6 +1230,7 @@ function startEditingProduct(id) {
     manageNameInput.value = product.name;
     managePriceInput.value = product.price;
     manageCategoryInput.value = product.category;
+    renderManageProductBranchOptions(product.availableInBranches || []);
     btnManageSaveProd.textContent = 'Actualizar';
     manageForm.style.display = 'block';
     manageNameInput.focus();
@@ -1054,6 +1345,7 @@ function deleteManagedCategory(id) {
 function resetManageBranchForm() {
     editingBranchId = null;
     manageBranchNameInput.value = '';
+    manageBranchUseTables.checked = false;
     btnManageSaveBranch.textContent = 'Guardar';
 }
 
@@ -1069,7 +1361,7 @@ function renderManageBranches() {
         div.innerHTML = `
             <div>
                 <div style="font-weight: 500;">${branch.name}</div>
-                <div style="color: var(--text-muted); font-size: 0.85rem;">Sucursal de venta</div>
+                <div style="color: var(--text-muted); font-size: 0.85rem;">${branch.useTables ? 'Con mesas abiertas' : 'Venta directa'}</div>
             </div>
             <div style="display:flex; align-items:center; gap:0.5rem;">
                 <button class="btn-icon" data-action="branch-edit" data-id="${branch.id}"><i class="ph ph-pencil-simple"></i></button>
@@ -1082,6 +1374,7 @@ function renderManageBranches() {
 
 function saveManagedBranch() {
     const name = manageBranchNameInput.value.trim();
+    const useTables = Boolean(manageBranchUseTables.checked);
     if (!name) return;
     const isEditing = Boolean(editingBranchId);
     const existingBranch = editingBranchId
@@ -1094,7 +1387,7 @@ function saveManagedBranch() {
         return;
     }
 
-    customBranches = upsertNamedItem(customBranches, { name }, 'branch', editingBranchId);
+    customBranches = upsertNamedItem(customBranches, { name, useTables }, 'branch', editingBranchId);
     saveBranchesState();
     if (previousName && previousName !== name) {
         renameTransactionsBranch(previousName, name);
@@ -1110,6 +1403,7 @@ function startEditingBranch(id) {
 
     editingBranchId = id;
     manageBranchNameInput.value = branch.name;
+    manageBranchUseTables.checked = Boolean(branch.useTables);
     btnManageSaveBranch.textContent = 'Actualizar';
     manageBranchForm.style.display = 'block';
     manageBranchNameInput.focus();
@@ -1425,6 +1719,455 @@ function downloadCSV() {
     link.click();
     document.body.removeChild(link);
     showToast("Respaldo descargado");
+}
+
+function openExpenseModal() {
+    openModal();
+    const expenseRadio = document.querySelector('input[name="type"][value="expense"]');
+    if (expenseRadio) {
+        expenseRadio.checked = true;
+        toggleFormType('expense');
+    }
+}
+
+function startNewSale() {
+    if (customBranches.length === 0) {
+        showToast("Crea al menos una sucursal antes de registrar ventas");
+        return;
+    }
+    activeSaleContext = { mode: 'sale', tableId: null };
+    saleDraft = createEmptySaleDraft({ branchId: customBranches[0]?.id || '' });
+    renderSaleBranchOptions();
+    renderSaleProducts();
+    renderSaleSummary();
+    updateSaleModalMeta();
+    saleModal.classList.add('open');
+}
+
+function closeSaleModal() {
+    saleModal.classList.remove('open');
+    activeSaleContext = { mode: 'sale', tableId: null };
+    saleDraft = createEmptySaleDraft();
+}
+
+function updateSaleModalMeta() {
+    const branch = getBranchById(saleDraft.branchId);
+    const isTableMode = activeSaleContext.mode === 'table';
+
+    saleModalTitle.textContent = isTableMode ? 'Editar Mesa' : 'Registrar Venta';
+    saleModalSubtitle.textContent = isTableMode
+        ? 'Agrega productos, ajusta cantidades y cobra cuando la mesa esté lista.'
+        : 'Selecciona sucursal y arma el pedido.';
+    salePrimaryAction.innerHTML = isTableMode
+        ? '<i class="ph ph-floppy-disk"></i> Guardar Mesa'
+        : `<i class="ph ${branch?.useTables ? 'ph-table' : 'ph-check-circle'}"></i> ${branch?.useTables ? 'Crear Mesa' : 'Guardar Venta'}`;
+    saleCloseTableBtn.style.display = isTableMode ? 'flex' : 'none';
+
+    if (isTableMode) {
+        const table = openTables.find(item => item.id === activeSaleContext.tableId);
+        saleTableBanner.style.display = 'block';
+        saleTableBanner.innerHTML = `<strong>${table?.name || 'Mesa abierta'}</strong> · ${branch?.name || 'Sucursal'} · ${saleDraft.items.reduce((sum, item) => sum + item.qty, 0)} productos`;
+    } else {
+        saleTableBanner.style.display = branch?.useTables ? 'block' : 'none';
+        saleTableBanner.textContent = branch?.useTables
+            ? 'Esta sucursal usa mesas. Al continuar se abrirá una nueva mesa para editar y cobrar después.'
+            : '';
+    }
+}
+
+function handleSaleBranchChange() {
+    saleDraft.branchId = saleBranchSelect.value || customBranches[0]?.id || '';
+    renderSaleProducts();
+    renderSaleSummary();
+    updateSaleModalMeta();
+}
+
+function getProductsForBranch(branchId) {
+    return customProducts.filter(product => productAvailableInBranch(product, branchId));
+}
+
+function renderSaleProducts() {
+    if (!saleProductsGrid) return;
+
+    const branchId = saleBranchSelect.value || saleDraft.branchId || customBranches[0]?.id || '';
+    saleDraft.branchId = branchId;
+    const products = getProductsForBranch(branchId);
+
+    if (products.length === 0) {
+        saleProductsGrid.innerHTML = `<div class="card" style="grid-column:1/-1; text-align:center; color:var(--text-muted);">No hay productos disponibles para esta sucursal.</div>`;
+        return;
+    }
+
+    saleProductsGrid.innerHTML = products.map(product => `
+        <article class="sale-product-card">
+            <div class="category">${product.category}</div>
+            <h4>${product.name}</h4>
+            <div class="price">${formatMoney(product.price)}</div>
+            <button type="button" class="submit-btn" data-product-id="${product.id}" style="margin-top:auto;">
+                <i class="ph ph-plus"></i> Agregar
+            </button>
+        </article>
+    `).join('');
+}
+
+function renderSaleSummary() {
+    if (!saleOrderItems) return;
+
+    const totalItems = saleDraft.items.reduce((sum, item) => sum + item.qty, 0);
+    saleItemsCount.textContent = `${totalItems} producto${totalItems === 1 ? '' : 's'}`;
+    saleTotalDisplay.textContent = formatMoney(saleDraft.total);
+    saleTotalInput.value = saleDraft.total > 0 ? String(saleDraft.total) : '';
+
+    if (saleDraft.items.length === 0) {
+        saleOrderItems.innerHTML = `<div class="card" style="padding: 1rem; text-align:center; color:var(--text-muted);">Todavía no agregas productos.</div>`;
+        updateSaleModalMeta();
+        return;
+    }
+
+    saleOrderItems.innerHTML = saleDraft.items.map(item => `
+        <div class="sale-order-row">
+            <div>
+                <h4>${item.name}</h4>
+                <div class="sale-order-meta">${formatMoney(item.price)} c/u · ${formatMoney(item.price * item.qty)}</div>
+            </div>
+            <div class="sale-order-controls">
+                <button type="button" data-sale-action="decrease" data-id="${item.productId}">-</button>
+                <span>${item.qty}</span>
+                <button type="button" data-sale-action="increase" data-id="${item.productId}">+</button>
+                <button type="button" class="delete" data-sale-action="remove" data-id="${item.productId}"><i class="ph ph-trash"></i></button>
+            </div>
+        </div>
+    `).join('');
+
+    updateSaleModalMeta();
+}
+
+function syncSaleDraftTotal() {
+    saleDraft.total = getItemsTotal(saleDraft.items);
+}
+
+function persistActiveSaleDraft() {
+    if (activeSaleContext.mode !== 'table' || !activeSaleContext.tableId) return;
+    updateTable(activeSaleContext.tableId, {
+        branchId: saleDraft.branchId,
+        items: saleDraft.items,
+        total: saleDraft.total
+    });
+}
+
+function addItemToCurrentSale(productId) {
+    const product = customProducts.find(item => item.id === productId);
+    if (!product) return;
+
+    const existing = saleDraft.items.find(item => item.productId === productId);
+    if (existing) {
+        existing.qty += 1;
+    } else {
+        saleDraft.items.push({
+            productId: product.id,
+            name: product.name,
+            price: Number(product.price) || 0,
+            qty: 1
+        });
+    }
+
+    syncSaleDraftTotal();
+    persistActiveSaleDraft();
+    renderSaleSummary();
+}
+
+function updateCurrentSaleItemQty(productId, delta) {
+    saleDraft.items = saleDraft.items
+        .map(item => item.productId === productId ? { ...item, qty: item.qty + delta } : item)
+        .filter(item => item.qty > 0);
+
+    syncSaleDraftTotal();
+    persistActiveSaleDraft();
+    renderSaleSummary();
+}
+
+function removeItemFromCurrentSale(productId) {
+    saleDraft.items = saleDraft.items.filter(item => item.productId !== productId);
+    syncSaleDraftTotal();
+    persistActiveSaleDraft();
+    renderSaleSummary();
+}
+
+function handleSaleTotalInput() {
+    const manualTotal = parseFloat(saleTotalInput.value);
+    saleDraft.total = !isNaN(manualTotal) && manualTotal >= 0 ? manualTotal : getItemsTotal(saleDraft.items);
+    persistActiveSaleDraft();
+    renderSaleSummary();
+}
+
+function buildIncomeTransaction({ branchId, items, total, source = 'sale' }) {
+    const branch = getBranchById(branchId);
+    const desc = items.length > 0
+        ? items.map(item => `${item.qty}x ${item.name}`).join(', ')
+        : 'Venta General';
+
+    return {
+        type: 'income',
+        amount: Number(total) || 0,
+        desc,
+        category: 'Venta',
+        branch: branchId || '',
+        zone: branch?.name || '',
+        branchId: branchId || '',
+        itemsSoldArray: items.map(item => ({
+            productId: item.productId,
+            name: item.name,
+            qty: Number(item.qty) || 0,
+            price: Number(item.price) || 0,
+            total: (Number(item.price) || 0) * (Number(item.qty) || 0),
+            category: customProducts.find(product => product.id === item.productId)?.category || ''
+        })),
+        products: items.map(item => ({ ...item })),
+        source,
+        date: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+    };
+}
+
+async function saveTransactionRecord(newTx, successMessage = 'Registro guardado con éxito') {
+    try {
+        if (!db) throw new Error("Firebase No Configurado");
+        await addDoc(collection(db, "transactions"), newTx);
+        showToast(successMessage);
+        return true;
+    } catch (err) {
+        console.error("Error guardando:", err);
+        showToast("Guardado localmente. Revisar Firebase.");
+        const localTx = { ...newTx, id: `temp_${Date.now()}` };
+        transactions = [localTx, ...transactions];
+        saveLocalState(STORAGE_KEYS.transactions, transactions);
+        updateDashboard();
+        if (views.transactions.classList.contains('active-view')) renderFullHistory();
+        return false;
+    }
+}
+
+async function handleSalePrimaryAction() {
+    const branchId = saleBranchSelect.value || saleDraft.branchId || customBranches[0]?.id || '';
+    const branch = getBranchById(branchId);
+
+    if (!branch) {
+        showToast("Selecciona una sucursal");
+        return;
+    }
+
+    saleDraft.branchId = branchId;
+
+    if (branch.useTables && activeSaleContext.mode !== 'table') {
+        const table = createTable(branchId);
+        saleDraft = createEmptySaleDraft({
+            branchId,
+            items: table.items,
+            total: table.total
+        });
+        activeSaleContext = { mode: 'table', tableId: table.id };
+        switchView('tables');
+        renderSaleSummary();
+        updateSaleModalMeta();
+        showToast(`${table.name} creada`);
+        return;
+    }
+
+    if (saleDraft.total <= 0) {
+        showToast("Agrega productos o un total válido");
+        return;
+    }
+
+    if (activeSaleContext.mode === 'table' && activeSaleContext.tableId) {
+        updateTable(activeSaleContext.tableId, {
+            branchId,
+            items: saleDraft.items,
+            total: saleDraft.total
+        });
+        showToast("Mesa actualizada");
+        closeSaleModal();
+        switchView('tables');
+        return;
+    }
+
+    const newTx = buildIncomeTransaction({
+        branchId,
+        items: saleDraft.items,
+        total: saleDraft.total,
+        source: 'sale'
+    });
+    await saveTransactionRecord(newTx, 'Venta guardada con éxito');
+    closeSaleModal();
+}
+
+async function handleCloseActiveTable() {
+    if (!activeSaleContext.tableId) return;
+    await closeTable(activeSaleContext.tableId);
+}
+
+function getOpenTables(branchId = '') {
+    return openTables.filter(table => table.status === 'open' && (!branchId || table.branchId === branchId));
+}
+
+function saveOpenTablesState() {
+    openTables = normalizeOpenTables(openTables);
+    saveLocalState(STORAGE_KEYS.openTables, openTables);
+    renderTablesView();
+    syncOpenTablesToCloud();
+}
+
+function getNextTableName(branchId) {
+    const maxNumber = getOpenTables(branchId)
+        .map(table => {
+            const match = String(table.name || '').match(/Mesa\s+(\d+)/i);
+            return match ? Number(match[1]) : 0;
+        })
+        .reduce((max, value) => Math.max(max, value), 0);
+
+    return `Mesa ${maxNumber + 1}`;
+}
+
+function createTable(branchId) {
+    const table = normalizeTable({
+        id: `table_${Date.now()}`,
+        branchId,
+        name: getNextTableName(branchId),
+        items: [],
+        total: 0,
+        status: 'open',
+        createdAt: new Date().toISOString()
+    });
+
+    openTables = [...openTables, table];
+    saveOpenTablesState();
+    return table;
+}
+
+function saveTable(table) {
+    const normalized = normalizeTable(table);
+    const exists = openTables.some(item => item.id === normalized.id);
+    openTables = exists
+        ? openTables.map(item => item.id === normalized.id ? normalized : item)
+        : [...openTables, normalized];
+    saveOpenTablesState();
+    return normalized;
+}
+
+function updateTable(tableId, patch) {
+    const current = openTables.find(item => item.id === tableId);
+    if (!current) return null;
+
+    const nextTable = normalizeTable({
+        ...current,
+        ...(typeof patch === 'function' ? patch(current) : patch)
+    });
+    return saveTable(nextTable);
+}
+
+function deleteTable(tableId) {
+    openTables = openTables.filter(item => item.id !== tableId);
+    saveOpenTablesState();
+}
+
+function addItemToTable(tableId, productId) {
+    const table = openTables.find(item => item.id === tableId);
+    if (!table) return null;
+    const product = customProducts.find(item => item.id === productId);
+    if (!product) return table;
+
+    const items = [...table.items];
+    const existing = items.find(item => item.productId === productId);
+
+    if (existing) existing.qty += 1;
+    else items.push({ productId, name: product.name, price: product.price, qty: 1 });
+
+    return updateTable(tableId, { items, total: getItemsTotal(items) });
+}
+
+function removeItemFromTable(tableId, productId) {
+    const table = openTables.find(item => item.id === tableId);
+    if (!table) return null;
+    const items = table.items.filter(item => item.productId !== productId);
+    return updateTable(tableId, { items, total: getItemsTotal(items) });
+}
+
+function updateItemQty(tableId, productId, delta) {
+    const table = openTables.find(item => item.id === tableId);
+    if (!table) return null;
+    const items = table.items
+        .map(item => item.productId === productId ? { ...item, qty: item.qty + delta } : item)
+        .filter(item => item.qty > 0);
+    return updateTable(tableId, { items, total: getItemsTotal(items) });
+}
+
+function openTableEditor(tableId) {
+    const table = openTables.find(item => item.id === tableId);
+    if (!table) return;
+
+    activeSaleContext = { mode: 'table', tableId };
+    saleDraft = createEmptySaleDraft({
+        branchId: table.branchId,
+        items: table.items.map(item => ({ ...item })),
+        total: Number(table.total) || getItemsTotal(table.items)
+    });
+    renderSaleBranchOptions();
+    saleBranchSelect.value = table.branchId;
+    renderSaleProducts();
+    renderSaleSummary();
+    updateSaleModalMeta();
+    saleModal.classList.add('open');
+}
+
+function renderTablesView() {
+    if (!tablesGrid) return;
+
+    const branchId = tablesBranchFilter?.value || '';
+    const filteredTables = getOpenTables(branchId);
+
+    if (filteredTables.length === 0) {
+        tablesGrid.innerHTML = `<div class="card" style="grid-column:1/-1; text-align:center; color:var(--text-muted);">No hay mesas abiertas${branchId ? ' en esta sucursal' : ''}.</div>`;
+        return;
+    }
+
+    tablesGrid.innerHTML = filteredTables.map(table => `
+        <article class="table-card">
+            <div class="table-card-top">
+                <div>
+                    <div class="table-card-title">${table.name}</div>
+                    <div class="table-card-subtitle">${getBranchNameById(table.branchId)} · ${table.items.reduce((sum, item) => sum + item.qty, 0)} productos</div>
+                </div>
+                <div class="table-card-total">${formatMoney(table.total)}</div>
+            </div>
+            <div class="table-card-actions">
+                <button type="button" class="submit-btn" data-table-action="edit" data-id="${table.id}"><i class="ph ph-pencil-simple"></i> Editar</button>
+                <button type="button" class="submit-btn" style="background: var(--success);" data-table-action="charge" data-id="${table.id}"><i class="ph ph-currency-circle-dollar"></i> Cobrar</button>
+            </div>
+        </article>
+    `).join('');
+}
+
+async function closeTable(tableId) {
+    const table = openTables.find(item => item.id === tableId);
+    if (!table) return;
+
+    if ((Number(table.total) || 0) <= 0) {
+        showToast("La mesa no tiene total para cobrar");
+        return;
+    }
+
+    const transaction = buildIncomeTransaction({
+        branchId: table.branchId,
+        items: table.items,
+        total: table.total,
+        source: 'table'
+    });
+
+    await saveTransactionRecord(transaction, `${table.name} cobrada con éxito`);
+    deleteTable(tableId);
+
+    if (activeSaleContext.tableId === tableId) {
+        closeSaleModal();
+    }
 }
 
 function renderExpenseTags() {

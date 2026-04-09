@@ -3,7 +3,8 @@ export const STORAGE_KEYS = {
     products: 'customProducts',
     expenseTags: 'customExpenseTags',
     branches: 'customBranches',
-    categories: 'customCategories'
+    categories: 'customCategories',
+    openTables: 'openTables'
 };
 
 function parseJSON(value, fallback) {

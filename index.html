@@ -55,11 +55,17 @@
             </div>
             
             <nav class="side-nav">
-                <button class="new-btn" id="btn-new-transaction" style="margin-bottom: 1.5rem;">
-                    <i class="ph ph-plus-circle"></i> <span>Nuevo Registro</span>
+                <button class="new-btn" id="btn-new-sale" style="margin-bottom: 0.75rem;">
+                    <i class="ph ph-storefront"></i> <span>Registrar Venta</span>
+                </button>
+                <button class="new-btn secondary" id="btn-new-expense" style="margin-bottom: 1.5rem;">
+                    <i class="ph ph-shopping-cart"></i> <span>Registrar Gasto</span>
                 </button>
                 <button class="nav-item active" id="nav-dashboard">
                     <i class="ph ph-squares-four"></i> Principal
+                </button>
+                <button class="nav-item" id="nav-tables">
+                    <i class="ph ph-table"></i> Mesas
                 </button>
                 <button class="nav-item" id="nav-transactions">
                     <i class="ph ph-list-dashes"></i> Historial
@@ -206,6 +212,26 @@
                 </section>
             </div>
 
+            <div id="view-tables" class="view">
+                <section class="recent-transactions full-height">
+                    <div class="section-header">
+                        <div>
+                            <h3>Mesas Abiertas</h3>
+                            <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 0.25rem;">Edita pedidos abiertos y cobra sin generar transacciones hasta cerrar la mesa.</p>
+                        </div>
+                        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+                            <select id="tables-branch-filter" style="min-width: 220px;">
+                                <option value="">Todas las sucursales</option>
+                            </select>
+                            <button class="btn-text" id="btn-refresh-tables"><i class="ph ph-arrows-clockwise"></i> Actualizar</button>
+                        </div>
+                    </div>
+                    <div id="tables-grid" class="tables-grid">
+                        <!-- js injected -->
+                    </div>
+                </section>
+            </div>
+
             <!-- Backup & Export View -->
             <div id="view-backup" class="view">
                 <section class="recent-transactions full-height">
@@ -241,9 +267,14 @@
                             <input type="text" id="manage-prod-name" placeholder="Nombre (Ej. Refresco Lata)">
                             <input type="number" id="manage-prod-price" placeholder="Precio ($)" min="0" step="0.5">
                         </div>
-                        <div style="display: flex; gap: 0.5rem;">
-                                <select id="manage-prod-cat" style="flex-grow: 1;"></select>
+                        <div style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem;">
+                            <select id="manage-prod-cat" style="flex-grow: 1;"></select>
                             <button type="button" id="manage-save-product" style="background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer;">Guardar</button>
+                        </div>
+                        <div>
+                            <label style="margin-bottom: 0.5rem; display:block;">Disponible en sucursales</label>
+                            <div id="manage-product-branches" class="mini-check-grid"></div>
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Si no seleccionas ninguna, el producto estará disponible en todas.</p>
                         </div>
                     </div>
                     <div id="manage-products-list">
@@ -274,6 +305,10 @@
                         <div style="display: grid; grid-template-columns: 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
                             <input type="text" id="manage-branch-name" placeholder="Nombre (Ej. Universidad)">
                         </div>
+                        <label class="inline-checkbox" style="margin-bottom: 0.75rem;">
+                            <input type="checkbox" id="manage-branch-use-tables">
+                            <span>Usar sistema de mesas en esta sucursal</span>
+                        </label>
                         <button type="button" id="manage-save-branch" style="background: var(--success); color: white; border: none; padding: 0.75rem 1rem; border-radius: 6px; cursor: pointer; width: 100%;">Guardar</button>
                     </div>
                     <div id="manage-branches-list">
@@ -297,6 +332,54 @@
                 </section>
             </div>
         </main>
+    </div>
+
+    <div class="modal-overlay" id="sale-modal">
+        <div class="modal sale-modal">
+            <div class="modal-header">
+                <div>
+                    <h2 id="sale-modal-title">Registrar Venta</h2>
+                    <p id="sale-modal-subtitle" style="color: var(--text-muted); font-size: 0.9rem; margin-top: 0.35rem;">Selecciona sucursal y arma el pedido.</p>
+                </div>
+                <button class="close-btn" id="close-sale-modal"><i class="ph ph-x"></i></button>
+            </div>
+
+            <div class="form-group">
+                <label for="sale-branch-select">Punto de venta</label>
+                <select id="sale-branch-select"></select>
+            </div>
+
+            <div id="sale-table-banner" class="table-banner" style="display:none;"></div>
+
+            <div class="sale-layout">
+                <div>
+                    <div class="section-header" style="margin-bottom: 0.75rem;">
+                        <h3 style="font-size: 1rem;">Menú</h3>
+                    </div>
+                    <div id="sale-products-grid" class="sale-products-grid">
+                        <!-- js injected -->
+                    </div>
+                </div>
+
+                <div class="sale-summary-card">
+                    <div class="section-header" style="margin-bottom: 0.75rem;">
+                        <h3 style="font-size: 1rem;">Pedido Actual</h3>
+                        <span id="sale-items-count" style="color: var(--text-muted); font-size: 0.85rem;">0 productos</span>
+                    </div>
+                    <div id="sale-order-items" class="sale-order-items"></div>
+                    <div class="form-group" style="margin-top: 1rem;">
+                        <label for="sale-total-input">Total editable</label>
+                        <input type="number" id="sale-total-input" step="0.5" min="0" placeholder="0.00">
+                    </div>
+                    <div class="sale-total-row">
+                        <span>Total</span>
+                        <strong id="sale-total-display">$0.00</strong>
+                    </div>
+                    <button type="button" class="submit-btn" id="sale-primary-action"><i class="ph ph-check-circle"></i> Guardar Venta</button>
+                    <button type="button" class="submit-btn" id="sale-close-table-btn" style="display:none; background: var(--success);"><i class="ph ph-currency-circle-dollar"></i> Cerrar Mesa</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Modal Form -->
