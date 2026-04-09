@@ -1,5 +1,5 @@
 import { db } from './firebase-config.js';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, writeBatch, updateDoc, where } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, writeBatch, updateDoc, where, setDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 import { INITIAL_ZONES, INITIAL_PRODUCTS, INITIAL_EXPENSE_TAGS, INITIAL_CATEGORIES } from './constants.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from './storage.js';
 import { authenticate, isAuthenticated } from './auth.js';
@@ -433,8 +433,8 @@ function subscribeProducts() {
         }
 
         customProducts = snapshot.docs.map(item => ({
-            id: item.id,
-            ...item.data()
+            ...item.data(),
+            id: item.id
         })).map((product, index) => normalizeProduct(product, index));
         saveLocalState(STORAGE_KEYS.products, customProducts);
         renderProductsList();
@@ -456,8 +456,8 @@ function subscribeExpenseTags() {
         }
 
         customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(snapshot.docs.map(item => ({
-            id: item.id,
-            ...item.data()
+            ...item.data(),
+            id: item.id
         }))));
         saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
         renderExpenseTags();
@@ -478,8 +478,8 @@ function subscribeBranches() {
         }
 
         customBranches = sortNamedListAlphabetically(normalizeNamedList(snapshot.docs.map(item => ({
-            id: item.id,
-            ...item.data()
+            ...item.data(),
+            id: item.id
         })), 'branch'));
         saveLocalState(STORAGE_KEYS.branches, customBranches);
         initFormZones();
@@ -506,8 +506,8 @@ function subscribeCategories() {
         }
 
         customCategories = sortNamedListAlphabetically(normalizeNamedList(snapshot.docs.map(item => ({
-            id: item.id,
-            ...item.data()
+            ...item.data(),
+            id: item.id
         })), 'cat'));
         saveLocalState(STORAGE_KEYS.categories, customCategories);
         renderCategoryOptions();
@@ -530,8 +530,8 @@ function subscribeOpenTables() {
         }
 
         openTables = normalizeOpenTables(snapshot.docs.map(item => ({
-            id: item.id,
-            ...item.data()
+            ...item.data(),
+            id: item.id
         })));
         saveLocalState(STORAGE_KEYS.openTables, openTables);
         renderTablesView();
@@ -879,6 +879,10 @@ function setupEventListeners() {
 
             if (tableAction === 'charge') {
                 closeTable(id);
+            }
+
+            if (tableAction === 'delete') {
+                promptDeleteTable(id);
             }
         });
     }
@@ -1899,7 +1903,7 @@ function addItemToCurrentSale(productId) {
     syncSaleDraftTotal();
     persistActiveSaleDraft();
     renderSaleSummary();
-    if (window.innerWidth <= 1024) setSaleMobilePanel('order');
+    showToast(`+1 ${product.name}`);
 }
 
 function updateCurrentSaleItemQty(productId, delta) {
@@ -1985,17 +1989,16 @@ async function handleSalePrimaryAction() {
     saleDraft.branchId = branchId;
 
     if (branch.useTables && activeSaleContext.mode !== 'table') {
-        const table = createTable(branchId);
+        const table = createTable(branchId, saleDraft.items, saleDraft.total);
         saleDraft = createEmptySaleDraft({
             branchId,
             items: table.items,
             total: table.total
         });
         activeSaleContext = { mode: 'table', tableId: table.id };
-        switchView('tables');
-        renderSaleSummary();
-        updateSaleModalMeta();
         showToast(`${table.name} creada`);
+        closeSaleModal();
+        switchView('tables');
         return;
     }
 
@@ -2053,13 +2056,13 @@ function getNextTableName(branchId) {
     return `Mesa ${maxNumber + 1}`;
 }
 
-function createTable(branchId) {
+function createTable(branchId, initialItems = [], initialTotal = 0) {
     const table = normalizeTable({
         id: `table_${Date.now()}`,
         branchId,
         name: getNextTableName(branchId),
-        items: [],
-        total: 0,
+        items: initialItems,
+        total: initialTotal,
         status: 'open',
         createdAt: new Date().toISOString()
     });
@@ -2071,6 +2074,13 @@ function createTable(branchId) {
 
 function saveTable(table) {
     const normalized = normalizeTable(table);
+    
+    if (db) {
+        setDoc(doc(db, "dashboard_tables", normalized.id), normalized).catch(e => {
+            console.warn("Fallo Firebase al guardar mesa, respaldando en LocalStorage", e);
+        });
+    }
+
     const exists = openTables.some(item => item.id === normalized.id);
     openTables = exists
         ? openTables.map(item => item.id === normalized.id ? normalized : item)
@@ -2091,8 +2101,20 @@ function updateTable(tableId, patch) {
 }
 
 function deleteTable(tableId) {
+    if (db) {
+        deleteDoc(doc(db, "dashboard_tables", tableId)).catch(e => {
+            console.warn("Fallo Firebase al eliminar mesa, respaldando en LocalStorage", e);
+        });
+    }
     openTables = openTables.filter(item => item.id !== tableId);
     saveOpenTablesState();
+}
+
+function promptDeleteTable(id) {
+    if (confirm("¿Estás seguro de que quieres eliminar esta mesa completa? Se perderá el pedido actual.")) {
+        deleteTable(id);
+        showToast("Mesa eliminada");
+    }
 }
 
 function addItemToTable(tableId, productId) {
@@ -2169,6 +2191,7 @@ function renderTablesView() {
             <div class="table-card-actions">
                 <button type="button" class="submit-btn" data-table-action="edit" data-id="${table.id}"><i class="ph ph-pencil-simple"></i> Editar</button>
                 <button type="button" class="submit-btn" style="background: var(--success);" data-table-action="charge" data-id="${table.id}"><i class="ph ph-currency-circle-dollar"></i> Cobrar</button>
+                <button type="button" class="submit-btn" style="background: var(--danger);" data-table-action="delete" data-id="${table.id}"><i class="ph ph-trash"></i> Eliminar</button>
             </div>
         </article>
     `).join('');
@@ -2372,7 +2395,7 @@ function fetchTransactions() {
         if (!snapshot.empty) {
             transactions = [];
             snapshot.forEach((doc) => {
-                transactions.push({ id: doc.id, ...doc.data() });
+                transactions.push({ ...doc.data(), id: doc.id });
             });
             saveLocalState(STORAGE_KEYS.transactions, transactions);
             updateDashboard();
