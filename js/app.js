@@ -459,7 +459,7 @@ function subscribeExpenseTags() {
         customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(snapshot.docs.map(item => ({
             ...item.data(),
             id: item.id
-        }))));
+        }));
         saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
         renderExpenseTags();
         renderManageExpenseTags();
@@ -681,24 +681,6 @@ function setupEventListeners() {
         btnRefreshTables.addEventListener('click', renderTablesView);
     }
 
-    if (saleProductsGrid) {
-        saleProductsGrid.addEventListener('click', (e) => {
-            const btn = e.target.closest('button');
-            if (!btn) return;
-            
-            const productId = btn.dataset.productId;
-            const action = btn.dataset.action;
-            
-            if (action === 'add' || !action) {
-                addItemToCurrentSale(productId);
-            } else if (action === 'increase') {
-                updateCurrentSaleItemQty(productId, 1);
-            } else if (action === 'decrease') {
-                updateCurrentSaleItemQty(productId, -1);
-            }
-        });
-    }
-
     if (mobileSaleSummary) {
         mobileSaleSummary.addEventListener('click', (e) => {
             if (e.target.closest('.mobile-summary-btn')) {
@@ -916,9 +898,19 @@ function setupEventListeners() {
 
     if (saleProductsGrid) {
         saleProductsGrid.addEventListener('click', (event) => {
-            const button = event.target.closest('[data-product-id]');
-            if (!button) return;
-            addItemToCurrentSale(button.dataset.productId);
+            const btn = event.target.closest('button');
+            if (!btn) return;
+            
+            const productId = btn.dataset.productId;
+            const action = btn.dataset.action;
+            
+            if (action === 'add' || !action) {
+                addItemToCurrentSale(productId);
+            } else if (action === 'increase') {
+                updateCurrentSaleItemQty(productId, 1);
+            } else if (action === 'decrease') {
+                updateCurrentSaleItemQty(productId, -1);
+            }
         });
     }
 
@@ -2317,11 +2309,11 @@ function toggleFormType(type) {
     if (type === 'income') {
         extraSalesFields.style.display = 'block';
         document.getElementById('desc-group').style.display = 'none';
-        document.getElementById('amount-label').textContent = 'Total Editable de la Venta ($)';
+        document.getElementById('amount-label').textContent = 'Total Editable de la Venta ($)' ;
     } else {
         extraSalesFields.style.display = 'none';
         document.getElementById('desc-group').style.display = 'block';
-        document.getElementById('amount-label').textContent = 'Monto del Gasto ($)';
+        document.getElementById('amount-label').textContent = 'Monto del Gasto ($)' ;
     }
 }
 
