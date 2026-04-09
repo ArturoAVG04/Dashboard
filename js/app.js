@@ -130,6 +130,8 @@ const saleTotalDisplay = document.getElementById('sale-total-display');
 const salePrimaryAction = document.getElementById('sale-primary-action');
 const saleCloseTableBtn = document.getElementById('sale-close-table-btn');
 const saleTableBanner = document.getElementById('sale-table-banner');
+const saleMobileSwitch = document.getElementById('sale-mobile-switch');
+const saleLayout = document.querySelector('.sale-layout');
 
 function createEmptySaleDraft(overrides = {}) {
     return {
@@ -236,6 +238,7 @@ function init() {
     renderTablesBranchFilter();
     renderTablesView();
     renderSaleBranchOptions();
+    setSaleMobilePanel('menu');
 
     // Auth Check
     if (isAuthenticated()) {
@@ -660,6 +663,14 @@ function setupEventListeners() {
     saleTotalInput.addEventListener('input', handleSaleTotalInput);
     salePrimaryAction.addEventListener('click', handleSalePrimaryAction);
     saleCloseTableBtn.addEventListener('click', handleCloseActiveTable);
+
+    if (saleMobileSwitch) {
+        saleMobileSwitch.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-sale-panel]');
+            if (!button) return;
+            setSaleMobilePanel(button.dataset.salePanel);
+        });
+    }
 
     if (tablesBranchFilter) {
         tablesBranchFilter.addEventListener('change', renderTablesView);
@@ -1730,6 +1741,17 @@ function openExpenseModal() {
     }
 }
 
+function setSaleMobilePanel(panel = 'menu') {
+    if (!saleLayout || !saleMobileSwitch) return;
+
+    saleLayout.classList.remove('show-menu', 'show-order');
+    saleLayout.classList.add(panel === 'order' ? 'show-order' : 'show-menu');
+
+    saleMobileSwitch.querySelectorAll('[data-sale-panel]').forEach(button => {
+        button.classList.toggle('active', button.dataset.salePanel === panel);
+    });
+}
+
 function startNewSale() {
     if (customBranches.length === 0) {
         showToast("Crea al menos una sucursal antes de registrar ventas");
@@ -1741,6 +1763,7 @@ function startNewSale() {
     renderSaleProducts();
     renderSaleSummary();
     updateSaleModalMeta();
+    setSaleMobilePanel('menu');
     saleModal.classList.add('open');
 }
 
@@ -1748,6 +1771,7 @@ function closeSaleModal() {
     saleModal.classList.remove('open');
     activeSaleContext = { mode: 'sale', tableId: null };
     saleDraft = createEmptySaleDraft();
+    setSaleMobilePanel('menu');
 }
 
 function updateSaleModalMeta() {
@@ -1780,6 +1804,7 @@ function handleSaleBranchChange() {
     renderSaleProducts();
     renderSaleSummary();
     updateSaleModalMeta();
+    setSaleMobilePanel('menu');
 }
 
 function getProductsForBranch(branchId) {
@@ -1874,6 +1899,7 @@ function addItemToCurrentSale(productId) {
     syncSaleDraftTotal();
     persistActiveSaleDraft();
     renderSaleSummary();
+    if (window.innerWidth <= 1024) setSaleMobilePanel('order');
 }
 
 function updateCurrentSaleItemQty(productId, delta) {
@@ -2112,9 +2138,11 @@ function openTableEditor(tableId) {
     });
     renderSaleBranchOptions();
     saleBranchSelect.value = table.branchId;
+    saleDraft.branchId = table.branchId;
     renderSaleProducts();
     renderSaleSummary();
     updateSaleModalMeta();
+    setSaleMobilePanel('menu');
     saleModal.classList.add('open');
 }
 

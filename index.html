@@ -351,8 +351,13 @@
 
             <div id="sale-table-banner" class="table-banner" style="display:none;"></div>
 
+            <div class="sale-mobile-switch" id="sale-mobile-switch">
+                <button type="button" class="filter-btn active" data-sale-panel="menu">Menú</button>
+                <button type="button" class="filter-btn" data-sale-panel="order">Pedido</button>
+            </div>
+
             <div class="sale-layout">
-                <div>
+                <div id="sale-menu-panel">
                     <div class="section-header" style="margin-bottom: 0.75rem;">
                         <h3 style="font-size: 1rem;">Menú</h3>
                     </div>
@@ -361,7 +366,7 @@
                     </div>
                 </div>
 
-                <div class="sale-summary-card">
+                <div class="sale-summary-card" id="sale-order-panel">
                     <div class="section-header" style="margin-bottom: 0.75rem;">
                         <h3 style="font-size: 1rem;">Pedido Actual</h3>
                         <span id="sale-items-count" style="color: var(--text-muted); font-size: 0.85rem;">0 productos</span>
