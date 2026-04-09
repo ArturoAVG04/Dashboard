@@ -2799,21 +2799,12 @@ document.addEventListener('DOMContentLoaded', init);
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-        const isLocalDevHost = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
-
-        if (isLocalDevHost) {
-            navigator.serviceWorker.getRegistrations()
-                .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
-                .then(() => caches.keys())
-                .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
-                .catch((error) => {
-                    console.warn('No se pudieron limpiar los service workers locales:', error);
-                });
-            return;
-        }
-
-        navigator.serviceWorker.register('./sw.js').catch((error) => {
-            console.warn('No se pudo registrar el service worker:', error);
-        });
+        navigator.serviceWorker.getRegistrations()
+            .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+            .then(() => caches.keys())
+            .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+            .catch((error) => {
+                console.warn('No se pudieron limpiar los service workers:', error);
+            });
     });
 }
