@@ -678,7 +678,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 /* Responsive adjustments */
-@media (max-width: 1024px) {
+@media (max-width: 1280px) {
     .charts-section { grid-template-columns: 1fr; }
     .sale-layout {
         display: flex;
@@ -708,6 +708,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     #sale-order-panel,
     #sale-menu-panel {
         display: block;
+        width: 100%;
     }
     #sale-order-panel { order: -1; }
     .sale-products-grid {

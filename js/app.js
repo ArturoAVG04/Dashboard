@@ -547,9 +547,11 @@ function subscribeOpenTables() {
     if (!db) return;
 
     const tablesQuery = query(collection(db, "dashboard_tables"), orderBy("createdAt", "asc"));
-    onSnapshot(tablesQuery, async (snapshot) => {
+    onSnapshot(tablesQuery, (snapshot) => {
         if (snapshot.empty) {
-            await syncOpenTablesToCloud();
+            openTables = [];
+            saveLocalState(STORAGE_KEYS.openTables, openTables);
+            renderTablesView();
             return;
         }
 
@@ -2157,7 +2159,6 @@ function saveOpenTablesState() {
     openTables = normalizeOpenTables(openTables);
     saveLocalState(STORAGE_KEYS.openTables, openTables);
     renderTablesView();
-    syncOpenTablesToCloud();
 }
 
 function getNextTableName(branchId) {
@@ -2172,7 +2173,7 @@ function getNextTableName(branchId) {
 }
 
 function createTable(branchId, initialItems = [], initialTotal = 0) {
-    const table = normalizeTable({
+    return saveTable({
         id: `table_${Date.now()}`,
         branchId,
         name: getNextTableName(branchId),
@@ -2181,10 +2182,6 @@ function createTable(branchId, initialItems = [], initialTotal = 0) {
         status: 'open',
         createdAt: new Date().toISOString()
     });
-
-    openTables = [...openTables, table];
-    saveOpenTablesState();
-    return table;
 }
 
 function saveTable(table) {
