@@ -678,14 +678,19 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 /* Responsive adjustments */
-@media (max-width: 1280px) {
+@media (max-width: 1024px) {
     .charts-section { grid-template-columns: 1fr; }
     .sale-layout {
         display: flex;
         flex-direction: column;
         gap: 1rem;
     }
-    .sale-summary-card { position: static; }
+    .sale-summary-card {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        padding: 0.85rem;
+    }
     #sale-modal {
         align-items: stretch;
         padding: 0 !important;
@@ -710,9 +715,15 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         display: block;
         width: 100%;
     }
-    #sale-order-panel { order: -1; }
+    #sale-order-panel {
+        order: -1;
+        flex: 0 0 auto;
+    }
+    #sale-menu-panel {
+        flex: 1 1 auto;
+    }
     .sale-products-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));
         max-height: none;
         flex-grow: 0;
         overflow: visible;
@@ -784,6 +795,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     .sale-order-items {
         max-height: none;
         overflow: visible;
+    }
+
+    .sale-total-row {
+        margin-top: 0.75rem;
     }
 
     /* Sticky Mobile Summary */
@@ -994,6 +1009,10 @@ input[type="date"]::-webkit-calendar-picker-indicator {
         order: -1;
         position: static;
         top: auto;
+    }
+
+    .sale-summary-card {
+        padding: 0.75rem;
     }
 
     .sale-order-items {
@@ -1214,6 +1233,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 .sale-modal {
     max-width: 1100px;
+    container-type: inline-size;
+    container-name: sale-modal;
 }
 
 .sale-mobile-switch {
@@ -1236,15 +1257,25 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 }
 
 .sale-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.9fr);
+    display: flex;
+    flex-direction: row;
     gap: 1.25rem;
     align-items: start;
 }
 
+#sale-menu-panel {
+    flex: 1.5 1 0;
+    min-width: 0;
+}
+
+#sale-order-panel {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
 .sale-products-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
     gap: 0.85rem;
     max-height: 60vh;
     overflow-y: auto;
@@ -1286,6 +1317,48 @@ input[type="date"]::-webkit-calendar-picker-indicator {
     padding: 1rem;
     position: sticky;
     top: 0;
+}
+
+@container sale-modal (max-width: 920px) {
+    .sale-layout {
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    #sale-order-panel,
+    #sale-menu-panel {
+        width: 100%;
+    }
+
+    #sale-order-panel {
+        order: -1;
+        flex: 0 0 auto;
+        position: static;
+        top: auto;
+        z-index: auto;
+        padding: 0.85rem;
+    }
+
+    #sale-menu-panel {
+        flex: 1 1 auto;
+    }
+
+    .sale-order-items {
+        max-height: 26vh;
+        overflow-y: auto;
+        gap: 0.5rem;
+    }
+
+    .sale-order-row {
+        padding: 0.7rem;
+    }
+
+    .sale-products-grid {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));
+        max-height: none;
+        overflow: visible;
+        padding-right: 0;
+    }
 }
 
 .sale-order-items {

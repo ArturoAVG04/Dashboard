@@ -144,6 +144,16 @@ function scrollToTop() {
     saleModal?.querySelector('.sale-modal')?.scrollTo?.(0, 0);
 }
 
+function isStackedSaleLayout() {
+    return saleLayout && getComputedStyle(saleLayout).flexDirection === 'column';
+}
+
+function scrollSaleModalToTop(behavior = 'smooth') {
+    const container = saleModal?.querySelector('.sale-modal');
+    if (!container) return;
+    container.scrollTo({ top: 0, behavior });
+}
+
 function createEmptySaleDraft(overrides = {}) {
     return {
         branchId: '',
@@ -2018,6 +2028,7 @@ function addItemToCurrentSale(productId) {
     persistActiveSaleDraft();
     renderSaleSummary();
     renderSaleProducts();
+    if (isStackedSaleLayout()) scrollSaleModalToTop();
     showToast(`+1 ${product.name}`);
 }
 
@@ -2030,6 +2041,7 @@ function updateCurrentSaleItemQty(productId, delta) {
     persistActiveSaleDraft();
     renderSaleSummary();
     renderSaleProducts();
+    if (isStackedSaleLayout()) scrollSaleModalToTop();
 }
 
 function removeItemFromCurrentSale(productId) {
@@ -2038,6 +2050,7 @@ function removeItemFromCurrentSale(productId) {
     persistActiveSaleDraft();
     renderSaleSummary();
     renderSaleProducts();
+    if (isStackedSaleLayout()) scrollSaleModalToTop();
 }
 
 function handleSaleTotalInput() {
@@ -2045,6 +2058,7 @@ function handleSaleTotalInput() {
     saleDraft.total = !isNaN(manualTotal) && manualTotal >= 0 ? manualTotal : getItemsTotal(saleDraft.items);
     persistActiveSaleDraft();
     renderSaleSummary();
+    if (isStackedSaleLayout()) scrollSaleModalToTop('auto');
 }
 
 function buildIncomeTransaction({ branchId, items, total, source = 'sale' }) {
