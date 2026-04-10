@@ -66,6 +66,7 @@ const loginForm = document.getElementById('login-form');
 const loginPassword = document.getElementById('login-password');
 const loginError = document.getElementById('login-error');
 const btnToggleLoginPassword = document.getElementById('toggle-login-password');
+const loginPasswordIcon = btnToggleLoginPassword?.querySelector('i') || null;
 
 const recentTbody = document.getElementById('recent-tbody');
 const historyTbody = document.getElementById('history-tbody');
@@ -133,6 +134,15 @@ const saleTableBanner = document.getElementById('sale-table-banner');
 const saleMobileSwitch = document.getElementById('sale-mobile-switch');
 const saleLayout = document.querySelector('.sale-layout');
 const mobileSaleSummary = document.getElementById('mobile-sale-summary');
+
+function scrollToTop() {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    mainApp?.querySelector('.main-content')?.scrollTo?.(0, 0);
+    modal?.querySelector('.modal')?.scrollTo?.(0, 0);
+    saleModal?.querySelector('.sale-modal')?.scrollTo?.(0, 0);
+}
 
 function createEmptySaleDraft(overrides = {}) {
     return {
@@ -206,50 +216,63 @@ function productAvailableInBranch(product, branchId) {
 
 // Init App
 function init() {
-    if (document.getElementById('flatpickr-range')) {
-        flatpickr("#flatpickr-range", {
-            mode: "range",
-            locale: "es",
-            dateFormat: "d M Y",
-            onChange: function (selectedDates) {
-                if (selectedDates.length === 2) {
-                    customStartDate = selectedDates[0];
-                    customEndDate = selectedDates[1];
-                    currentFilter = 'custom';
-                    document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
-                    updateDashboard();
-                    if (views.transactions.classList.contains('active-view')) renderFullHistory();
-                }
-            }
-        });
+    if ('scrollRestoration' in history) {
+        history.scrollRestoration = 'manual';
     }
 
-    setupDateStr();
-    setupEventListeners();
-    initCharts();
-    initFormZones();
-    renderCategoryOptions();
-    renderProductsList();
-    renderExpenseTags();
-    renderManageCategories();
-    renderManageBranches();
-    renderManageProducts();
-    renderManageExpenseTags();
-    renderManageProductBranchOptions();
-    renderTablesBranchFilter();
-    renderTablesView();
-    renderSaleBranchOptions();
-    setSaleMobilePanel('menu');
+    try {
+        console.log("Iniciando aplicación...");
+        if (document.getElementById('flatpickr-range')) {
+            flatpickr("#flatpickr-range", {
+                mode: "range",
+                locale: "es",
+                dateFormat: "d M Y",
+                onChange: function (selectedDates) {
+                    if (selectedDates.length === 2) {
+                        customStartDate = selectedDates[0];
+                        customEndDate = selectedDates[1];
+                        currentFilter = 'custom';
+                        document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+                        updateDashboard();
+                        if (views.transactions.classList.contains('active-view')) renderFullHistory();
+                    }
+                }
+            });
+        }
+    } catch (e) { console.warn("Error en flatpickr:", e); }
 
-    // Auth Check
+    try { setupDateStr(); } catch (e) { console.error("Error en setupDateStr:", e); }
+    try { setupEventListeners(); } catch (e) { console.error("Error en setupEventListeners:", e); }
+    try { initCharts(); } catch (e) { console.error("Error en charts:", e); }
+    try { initFormZones(); } catch (e) { console.error("Error en zonas:", e); }
+    try { renderCategoryOptions(); } catch (e) { console.error("Error en categorias:", e); }
+    try { renderProductsList(); } catch (e) { console.error("Error en productos:", e); }
+    try { renderExpenseTags(); } catch (e) { console.error("Error en accesos de gasto:", e); }
+    try { renderManageCategories(); } catch (e) { console.error("Error en gestion de categorias:", e); }
+    try { renderManageBranches(); } catch (e) { console.error("Error en gestion de sucursales:", e); }
+    try { renderManageProducts(); } catch (e) { console.error("Error en gestion de productos:", e); }
+    try { renderManageExpenseTags(); } catch (e) { console.error("Error en gestion de gastos:", e); }
+    try { renderManageProductBranchOptions(); } catch (e) { console.error("Error en sucursales de producto:", e); }
+    try { renderTablesBranchFilter(); } catch (e) { console.error("Error en filtro de mesas:", e); }
+    try { renderTablesView(); } catch (e) { console.error("Error en vista de mesas:", e); }
+    try { renderSaleBranchOptions(); } catch (e) { console.error("Error en sucursales de venta:", e); }
+    try { setSaleMobilePanel('menu'); } catch (e) { console.error("Error en panel movil de venta:", e); }
+
     if (isAuthenticated()) {
         unlockApp();
+    } else {
+        loginScreen.style.display = 'flex';
+        mainApp.style.display = 'none';
+        loginPassword?.focus();
     }
+
+    scrollToTop();
 }
 
 function unlockApp() {
     loginScreen.style.display = 'none';
     mainApp.style.display = 'flex';
+    scrollToTop();
 
     // Si ya tenemos transacciones locales, las mostramos primero
     if (transactions.length > 0) {
@@ -459,7 +482,7 @@ function subscribeExpenseTags() {
         customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(snapshot.docs.map(item => ({
             ...item.data(),
             id: item.id
-        }));
+        }))));
         saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
         renderExpenseTags();
         renderManageExpenseTags();
@@ -624,13 +647,24 @@ function setupEventListeners() {
     if (loginForm) {
         loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const pw = loginPassword.value;
+            loginError.style.display = 'none';
+            const pw = loginPassword.value.trim();
 
             if (await authenticate(pw)) {
                 loginError.style.display = 'none';
+                loginPassword.value = '';
+                loginPassword.type = 'password';
+                btnToggleLoginPassword?.setAttribute('aria-pressed', 'false');
+                btnToggleLoginPassword?.setAttribute('aria-label', 'Mostrar contrasena');
+                if (loginPasswordIcon) {
+                    loginPasswordIcon.classList.remove('ph-eye-slash');
+                    loginPasswordIcon.classList.add('ph-eye');
+                }
                 unlockApp();
             } else {
                 loginError.style.display = 'block';
+                loginPassword.focus();
+                loginPassword.select();
             }
         });
     }
@@ -639,7 +673,13 @@ function setupEventListeners() {
         btnToggleLoginPassword.addEventListener('click', () => {
             const isHidden = loginPassword.type === 'password';
             loginPassword.type = isHidden ? 'text' : 'password';
-            btnToggleLoginPassword.innerHTML = `<i class="ph ${isHidden ? 'ph-eye-slash' : 'ph-eye'}"></i>`;
+            btnToggleLoginPassword.setAttribute('aria-label', isHidden ? 'Ocultar contrasena' : 'Mostrar contrasena');
+            btnToggleLoginPassword.setAttribute('aria-pressed', isHidden ? 'true' : 'false');
+
+            if (loginPasswordIcon) {
+                loginPasswordIcon.classList.remove('ph-eye', 'ph-eye-slash');
+                loginPasswordIcon.classList.add(isHidden ? 'ph-eye-slash' : 'ph-eye');
+            }
         });
     }
 
@@ -945,6 +985,8 @@ function switchView(viewName) {
         renderManageBranches();
         renderManageProductBranchOptions();
     }
+
+    scrollToTop();
 }
 
 function openModal(transaction = null) {
@@ -970,12 +1012,14 @@ function openModal(transaction = null) {
     }
 
     modal.classList.add('open');
+    scrollToTop();
 }
 
 function closeModal() {
     editingTransactionId = null;
     modalTitle.textContent = 'Registrar Movimiento';
     modal.classList.remove('open');
+    scrollToTop();
 }
 
 function initFormZones() {
@@ -1792,6 +1836,7 @@ function startNewSale() {
     updateSaleModalMeta();
     setSaleMobilePanel('menu');
     saleModal.classList.add('open');
+    scrollToTop();
 }
 
 function closeSaleModal() {
@@ -1799,6 +1844,7 @@ function closeSaleModal() {
     activeSaleContext = { mode: 'sale', tableId: null };
     saleDraft = createEmptySaleDraft();
     setSaleMobilePanel('menu');
+    scrollToTop();
 }
 
 function updateSaleModalMeta() {
@@ -2235,6 +2281,7 @@ function openTableEditor(tableId) {
     updateSaleModalMeta();
     setSaleMobilePanel('menu');
     saleModal.classList.add('open');
+    scrollToTop();
 }
 
 function renderTablesView() {
@@ -2900,3 +2947,10 @@ if ('serviceWorker' in navigator) {
             });
     });
 }
+
+window.addEventListener('pageshow', () => {
+    if ('scrollRestoration' in history) {
+        history.scrollRestoration = 'manual';
+    }
+    scrollToTop();
+});
