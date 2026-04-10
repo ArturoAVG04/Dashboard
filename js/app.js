@@ -2304,6 +2304,14 @@ function renderTablesView() {
                 </div>
                 <div class="table-card-total">${formatMoney(table.total)}</div>
             </div>
+            <div class="table-card-preview">
+                ${table.items.length > 0
+                    ? table.items
+                        .slice(0, 4)
+                        .map(item => `<span class="table-card-chip">${item.qty}x ${item.name}</span>`)
+                        .join('')
+                    : '<span class="table-card-chip empty">Sin productos</span>'}
+            </div>
             <div class="table-card-actions">
                 <button type="button" class="submit-btn" data-table-action="edit" data-id="${table.id}"><i class="ph ph-pencil-simple"></i> Editar</button>
                 <button type="button" class="submit-btn" style="background: var(--success);" data-table-action="charge" data-id="${table.id}"><i class="ph ph-currency-circle-dollar"></i> Cobrar</button>
