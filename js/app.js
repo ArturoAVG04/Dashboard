@@ -290,6 +290,7 @@ function unlockApp() {
         if (views.transactions.classList.contains('active-view')) renderFullHistory();
     }
 
+    syncStrandedOfflineTransactions();
     fetchTransactions();
     subscribeProducts();
     subscribeExpenseTags();
@@ -1047,6 +1048,7 @@ function renderSaleBranchOptions() {
     if (!saleBranchSelect) return;
 
     const selectedBranchId = saleDraft.branchId;
+    const lastBranchId = loadLocalState(STORAGE_KEYS.lastBranch, null);
     saleBranchSelect.innerHTML = '';
 
     customBranches.forEach(branch => {
@@ -1056,11 +1058,15 @@ function renderSaleBranchOptions() {
         saleBranchSelect.appendChild(option);
     });
 
-    if (customBranches.some(branch => branch.id === selectedBranchId)) {
+    if (selectedBranchId && customBranches.some(branch => branch.id === selectedBranchId)) {
         saleBranchSelect.value = selectedBranchId;
+    } else if (lastBranchId && customBranches.some(branch => branch.id === lastBranchId)) {
+        saleBranchSelect.value = lastBranchId;
+        saleDraft.branchId = lastBranchId;
     } else if (customBranches[0]) {
         saleBranchSelect.value = customBranches[0].id;
         saleDraft.branchId = customBranches[0].id;
+        saveLocalState(STORAGE_KEYS.lastBranch, saleDraft.branchId);
     }
 }
 
@@ -1841,7 +1847,14 @@ function startNewSale() {
         return;
     }
     activeSaleContext = { mode: 'sale', tableId: null };
-    saleDraft = createEmptySaleDraft({ branchId: customBranches[0]?.id || '' });
+    
+    let initialBranchId = customBranches[0]?.id || '';
+    const lastBranchId = loadLocalState(STORAGE_KEYS.lastBranch, null);
+    if (lastBranchId && customBranches.some(b => b.id === lastBranchId)) {
+        initialBranchId = lastBranchId;
+    }
+
+    saleDraft = createEmptySaleDraft({ branchId: initialBranchId });
     renderSaleBranchOptions();
     renderSaleProducts();
     renderSaleSummary();
@@ -1886,6 +1899,7 @@ function updateSaleModalMeta() {
 
 function handleSaleBranchChange() {
     saleDraft.branchId = saleBranchSelect.value || customBranches[0]?.id || '';
+    saveLocalState(STORAGE_KEYS.lastBranch, saleDraft.branchId);
     renderSaleProducts();
     renderSaleSummary();
     updateSaleModalMeta();
@@ -2091,21 +2105,14 @@ function buildIncomeTransaction({ branchId, items, total, source = 'sale' }) {
 }
 
 async function saveTransactionRecord(newTx, successMessage = 'Registro guardado con éxito') {
-    try {
-        if (!db) throw new Error("Firebase No Configurado");
-        await addDoc(collection(db, "transactions"), newTx);
-        showToast(successMessage);
-        return true;
-    } catch (err) {
-        console.error("Error guardando:", err);
-        showToast("Guardado localmente. Revisar Firebase.");
-        const localTx = { ...newTx, id: `temp_${Date.now()}` };
-        transactions = [localTx, ...transactions];
-        saveLocalState(STORAGE_KEYS.transactions, transactions);
-        updateDashboard();
-        if (views.transactions.classList.contains('active-view')) renderFullHistory();
+    if (!db) {
+        showToast("Firebase No Configurado");
         return false;
     }
+    // Fire and forget: no await
+    addDoc(collection(db, "transactions"), newTx).catch(err => console.error("Error guardando Firebase:", err));
+    showToast(successMessage);
+    return true;
 }
 
 async function handleSalePrimaryAction() {
@@ -2491,34 +2498,29 @@ async function handleFormSubmit(e) {
         type, amount, desc, category, zone, itemsSoldArray, date: dateObj.toISOString(), createdAt: new Date().toISOString()
     };
 
-    try {
-        if (!db) throw new Error("Firebase No Configurado");
-        if (editingTransactionId && !editingTransactionId.startsWith('temp_')) {
-            await updateDoc(doc(db, "transactions", editingTransactionId), newTx);
-            showToast("Registro actualizado con éxito");
-        } else if (editingTransactionId && editingTransactionId.startsWith('temp_')) {
-            transactions = transactions.map(item => item.id === editingTransactionId ? { ...item, ...newTx, id: editingTransactionId } : item);
-            saveLocalState(STORAGE_KEYS.transactions, transactions);
-            updateDashboard();
-            renderFullHistory();
-            showToast("Registro actualizado localmente");
-        } else {
-            await addDoc(collection(db, "transactions"), newTx);
-            showToast("Registro guardado con éxito");
-        }
-        closeModal();
-    } catch (err) {
-        console.error("Error guardando:", err);
-        showToast("Guardado localmente. Revisar Firebase.");
-        newTx.id = editingTransactionId || ("temp_" + Date.now());
-        const exists = transactions.some(item => item.id === newTx.id);
-        transactions = exists
-            ? transactions.map(item => item.id === newTx.id ? newTx : item)
-            : [...transactions, newTx];
-        saveLocalState(STORAGE_KEYS.transactions, transactions);
-        updateDashboard();
-        renderFullHistory();
-        closeModal();
+    if (!db) {
+        showToast("Firebase No Configurado");
+        return;
+    }
+    if (editingTransactionId && !editingTransactionId.startsWith('temp_')) {
+        updateDoc(doc(db, "transactions", editingTransactionId), newTx).catch(err => console.error("Error actualizando:", err));
+        showToast("Registro actualizado con éxito");
+    } else {
+        addDoc(collection(db, "transactions"), newTx).catch(err => console.error("Error agregando:", err));
+        showToast("Registro guardado con éxito");
+    }
+    closeModal();
+}
+function syncStrandedOfflineTransactions() {
+    if (!db) return;
+    const tempTxs = transactions.filter(t => typeof t.id === 'string' && t.id.startsWith('temp_'));
+    if (tempTxs.length > 0) {
+        console.log(`Sincronizando ${tempTxs.length} transacciones varadas localmente a Firebase...`);
+        tempTxs.forEach(tx => {
+            const { id, ...txData } = tx;
+            addDoc(collection(db, "transactions"), txData).catch(e => console.warn("Background sync error:", e));
+        });
+        transactions = transactions.filter(t => !(typeof t.id === 'string' && t.id.startsWith('temp_')));
     }
 }
 
@@ -2543,17 +2545,14 @@ function fetchTransactions() {
 
 window.deleteTransaction = async (id) => {
     if (confirm("¿Estás seguro de eliminar este registro?")) {
-        try {
-            if (id.startsWith('temp_')) {
-                transactions = transactions.filter(t => t.id !== id);
-                saveLocalState(STORAGE_KEYS.transactions, transactions);
-                updateDashboard();
-                renderFullHistory();
-            } else {
-                await deleteDoc(doc(db, "transactions", id));
-            }
-        } catch (e) {
-            console.error(e);
+        if (!db) return;
+        if (id.startsWith('temp_')) {
+            transactions = transactions.filter(t => t.id !== id);
+            saveLocalState(STORAGE_KEYS.transactions, transactions);
+            updateDashboard();
+            renderFullHistory();
+        } else {
+            deleteDoc(doc(db, "transactions", id)).catch(e => console.error("Error eliminando:", e));
         }
     }
 };
@@ -2590,9 +2589,10 @@ function getFilteredData() {
                 return tDate.getFullYear() === now.getFullYear() && tDate.getMonth() === now.getMonth() && tDate.getDate() === now.getDate();
             }
             if (currentFilter === 'week') {
-                const oneWeekAgo = new Date();
-                oneWeekAgo.setDate(now.getDate() - 7);
-                return tDate >= oneWeekAgo && tDate <= now;
+                const dayOfWeek = now.getDay() || 7;
+                const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1);
+                const sunday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 7, 23, 59, 59);
+                return tDate >= monday && tDate <= sunday;
             }
             if (currentFilter === 'month') {
                 return tDate.getFullYear() === now.getFullYear() && tDate.getMonth() === now.getMonth();

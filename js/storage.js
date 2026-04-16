@@ -4,7 +4,8 @@ export const STORAGE_KEYS = {
     expenseTags: 'customExpenseTags',
     branches: 'customBranches',
     categories: 'customCategories',
-    openTables: 'openTables'
+    openTables: 'openTables',
+    lastBranch: 'lastSelectedBranch'
 };
 
 function parseJSON(value, fallback) {
