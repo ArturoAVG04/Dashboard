@@ -30,6 +30,13 @@ let isSyncingCategories = false;
 let isSyncingTables = false;
 let saleDraft = createEmptySaleDraft();
 let activeSaleContext = { mode: 'sale', tableId: null };
+let recentTransactionsVisible = false;
+let historyTransactionsVisible = false;
+let topSellersVisible = false;
+let topExpensesVisible = false;
+let historyTypeFilter = 'all';
+let historySearchTerm = '';
+let selectedExpenseShortcuts = [];
 
 // DOM Elements
 const views = {
@@ -71,7 +78,20 @@ const loginPasswordIcon = btnToggleLoginPassword?.querySelector('i') || null;
 const recentTbody = document.getElementById('recent-tbody');
 const historyTbody = document.getElementById('history-tbody');
 const topSellersTbody = document.getElementById('top-sellers-tbody');
+const topExpensesTbody = document.getElementById('top-expenses-tbody');
 const branchSalesList = document.getElementById('branch-sales-list');
+const dailyProductsTitle = document.getElementById('daily-products-title');
+const dailyProductsList = document.getElementById('daily-products-list');
+const recentTransactionsPanel = document.getElementById('recent-transactions-panel');
+const historyTransactionsPanel = document.getElementById('history-transactions-panel');
+const topSellersPanel = document.getElementById('top-sellers-panel');
+const topExpensesPanel = document.getElementById('top-expenses-panel');
+const btnToggleRecentTransactions = document.getElementById('btn-toggle-recent-transactions');
+const btnToggleHistoryTransactions = document.getElementById('btn-toggle-history-transactions');
+const btnToggleTopSellers = document.getElementById('btn-toggle-top-sellers');
+const btnToggleTopExpenses = document.getElementById('btn-toggle-top-expenses');
+const historyTypeFilterSelect = document.getElementById('history-type-filter');
+const historySearchInput = document.getElementById('history-search');
 
 // Form specific elements
 const typeSelectors = document.querySelectorAll('input[name="type"]');
@@ -90,6 +110,7 @@ const newExpenseForm = document.getElementById('new-expense-form');
 const btnSaveNewProduct = document.getElementById('save-new-product');
 const btnSaveNewExpense = document.getElementById('save-new-expense');
 const expenseTagsContainer = document.getElementById('expense-tags-container');
+const selectedExpensesContainer = document.getElementById('selected-expenses-container');
 const manageForm = document.getElementById('manage-new-product-form');
 const manageNameInput = document.getElementById('manage-prod-name');
 const managePriceInput = document.getElementById('manage-prod-price');
@@ -123,6 +144,7 @@ const closeSaleModalBtn = document.getElementById('close-sale-modal');
 const saleModalTitle = document.getElementById('sale-modal-title');
 const saleModalSubtitle = document.getElementById('sale-modal-subtitle');
 const saleBranchSelect = document.getElementById('sale-branch-select');
+const saleDateInput = document.getElementById('sale-date-input');
 const saleProductsGrid = document.getElementById('sale-products-grid');
 const saleOrderItems = document.getElementById('sale-order-items');
 const saleItemsCount = document.getElementById('sale-items-count');
@@ -161,6 +183,22 @@ function createEmptySaleDraft(overrides = {}) {
         total: 0,
         ...overrides
     };
+}
+
+function getLocalDateInputValue(date = new Date()) {
+    const tzOffset = date.getTimezoneOffset() * 60000;
+    return new Date(date.getTime() - tzOffset).toISOString().slice(0, 10);
+}
+
+function createLocalDateFromInput(dateValue) {
+    const nowLocal = new Date();
+    if (!dateValue) return nowLocal;
+
+    const [yy, mm, dd] = dateValue.split('-').map(Number);
+    if (!yy || !mm || !dd) return nowLocal;
+
+    nowLocal.setFullYear(yy, mm - 1, dd);
+    return nowLocal;
 }
 
 function normalizeProduct(product, index = 0) {
@@ -242,7 +280,7 @@ function init() {
                         customStartDate = selectedDates[0];
                         customEndDate = selectedDates[1];
                         currentFilter = 'custom';
-                        document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+                        document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => btn.classList.remove('active'));
                         updateDashboard();
                         if (views.transactions.classList.contains('active-view')) renderFullHistory();
                     }
@@ -703,6 +741,32 @@ function setupEventListeners() {
     navBtns.products.addEventListener('click', () => switchView('products'));
     navBtns.backup.addEventListener('click', () => switchView('backup'));
     btnViewAll.addEventListener('click', () => switchView('transactions'));
+    btnToggleRecentTransactions?.addEventListener('click', () => {
+        recentTransactionsVisible = !recentTransactionsVisible;
+        updateDashboard();
+    });
+    btnToggleHistoryTransactions?.addEventListener('click', () => {
+        historyTransactionsVisible = !historyTransactionsVisible;
+        renderFullHistory();
+    });
+    btnToggleTopSellers?.addEventListener('click', () => {
+        topSellersVisible = !topSellersVisible;
+        renderFullHistory();
+    });
+    btnToggleTopExpenses?.addEventListener('click', () => {
+        topExpensesVisible = !topExpensesVisible;
+        renderFullHistory();
+    });
+    historyTypeFilterSelect?.addEventListener('change', () => {
+        historyTypeFilter = historyTypeFilterSelect.value || 'all';
+        if (!historyTransactionsVisible) historyTransactionsVisible = true;
+        renderFullHistory();
+    });
+    historySearchInput?.addEventListener('input', () => {
+        historySearchTerm = historySearchInput.value || '';
+        if (!historyTransactionsVisible) historyTransactionsVisible = true;
+        renderFullHistory();
+    });
 
     // Exports
     document.getElementById('btn-export-image').addEventListener('click', downloadImageSummary);
@@ -752,8 +816,10 @@ function setupEventListeners() {
     filterBtns.forEach(btn => {
         btn.addEventListener('click', (e) => {
             const tgt = e.target.closest('.filter-btn');
-            if (!tgt) return;
-            filterBtns.forEach(b => b.classList.remove('active'));
+            if (!tgt || !tgt.dataset.filter) return;
+            filterBtns.forEach(b => {
+                if (b.dataset.filter) b.classList.remove('active');
+            });
             tgt.classList.add('active');
             currentFilter = tgt.dataset.filter;
             updateDashboard();
@@ -1004,13 +1070,12 @@ function switchView(viewName) {
 
 function openModal(transaction = null) {
     form.reset();
+    resetSelectedExpenses();
     editingTransactionId = transaction?.id || null;
     modalTitle.textContent = editingTransactionId ? 'Editar Movimiento' : 'Registrar Movimiento';
 
     // Set default date to LOCAL date instead of UTC to avoid "Tomorrow" timezone bugs.
-    const tzOffset = (new Date()).getTimezoneOffset() * 60000;
-    const localISOTime = (new Date(Date.now() - tzOffset)).toISOString().slice(0, 10);
-    document.getElementById('date').value = localISOTime;
+    document.getElementById('date').value = getLocalDateInputValue();
 
     toggleFormType('income');
     newProductForm.style.display = 'none';
@@ -1032,6 +1097,7 @@ function closeModal() {
     editingTransactionId = null;
     modalTitle.textContent = 'Registrar Movimiento';
     modal.classList.remove('open');
+    resetSelectedExpenses();
     scrollToTop();
 }
 
@@ -1662,7 +1728,7 @@ function downloadImageSummary() {
 function getFilterLabel() {
     const labels = {
         day: 'Hoy',
-        week: 'Ultimos 7 dias',
+        week: 'Esta semana',
         month: 'Este mes',
         year: 'Este ano',
         all: 'Todo el historial',
@@ -1855,6 +1921,7 @@ function startNewSale() {
     }
 
     saleDraft = createEmptySaleDraft({ branchId: initialBranchId });
+    if (saleDateInput) saleDateInput.value = getLocalDateInputValue();
     renderSaleBranchOptions();
     renderSaleProducts();
     renderSaleSummary();
@@ -2075,7 +2142,7 @@ function handleSaleTotalInput() {
     if (isStackedSaleLayout()) scrollSaleModalToTop('auto');
 }
 
-function buildIncomeTransaction({ branchId, items, total, source = 'sale' }) {
+function buildIncomeTransaction({ branchId, items, total, source = 'sale', date = new Date() }) {
     const branch = getBranchById(branchId);
     const desc = items.length > 0
         ? items.map(item => `${item.qty}x ${item.name}`).join(', ')
@@ -2099,7 +2166,7 @@ function buildIncomeTransaction({ branchId, items, total, source = 'sale' }) {
         })),
         products: items.map(item => ({ ...item })),
         source,
-        date: new Date().toISOString(),
+        date: date.toISOString(),
         createdAt: new Date().toISOString()
     };
 }
@@ -2161,7 +2228,8 @@ async function handleSalePrimaryAction() {
         branchId,
         items: saleDraft.items,
         total: saleDraft.total,
-        source: 'sale'
+        source: 'sale',
+        date: createLocalDateFromInput(saleDateInput?.value)
     });
     await saveTransactionRecord(newTx, 'Venta guardada con éxito');
     closeSaleModal();
@@ -2169,7 +2237,7 @@ async function handleSalePrimaryAction() {
 
 async function handleCloseActiveTable() {
     if (!activeSaleContext.tableId) return;
-    await closeTable(activeSaleContext.tableId);
+    await closeTable(activeSaleContext.tableId, createLocalDateFromInput(saleDateInput?.value));
 }
 
 function getOpenTables(branchId = '') {
@@ -2291,6 +2359,7 @@ function openTableEditor(tableId) {
         items: table.items.map(item => ({ ...item })),
         total: Number(table.total) || getItemsTotal(table.items)
     });
+    if (saleDateInput) saleDateInput.value = getLocalDateInputValue();
     renderSaleBranchOptions();
     saleBranchSelect.value = table.branchId;
     saleDraft.branchId = table.branchId;
@@ -2339,7 +2408,7 @@ function renderTablesView() {
     `).join('');
 }
 
-async function closeTable(tableId) {
+async function closeTable(tableId, date = new Date()) {
     const table = openTables.find(item => item.id === tableId);
     if (!table) return;
 
@@ -2352,7 +2421,8 @@ async function closeTable(tableId) {
         branchId: table.branchId,
         items: table.items,
         total: table.total,
-        source: 'table'
+        source: 'table',
+        date
     });
 
     await saveTransactionRecord(transaction, `${table.name} cobrada con éxito`);
@@ -2368,14 +2438,100 @@ function renderExpenseTags() {
     customExpenseTags.forEach(tag => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'expense-tag';
+        btn.className = `expense-tag${selectedExpenseShortcuts.includes(tag.name) ? ' active' : ''}`;
         btn.textContent = tag.name;
-        btn.addEventListener('click', () => {
-            document.getElementById('description').value = tag.name;
-            showToast("Atajo pegado en descripción");
-        });
+        btn.addEventListener('click', () => toggleExpenseShortcut(tag.name));
         expenseTagsContainer.appendChild(btn);
     });
+}
+
+function getSelectedExpenseRows() {
+    const inputs = Array.from(selectedExpensesContainer?.querySelectorAll('.selected-expense-amount') || []);
+    return selectedExpenseShortcuts.map(name => {
+        const input = inputs.find(item => item.dataset.expenseName === name);
+        return {
+            name,
+            amount: parseFloat(input?.value) || 0
+        };
+    });
+}
+
+function updateSelectedExpensesTotal() {
+    if (selectedExpenseShortcuts.length === 0) {
+        totalSalesAmount.readOnly = false;
+        return;
+    }
+
+    const total = getSelectedExpenseRows().reduce((sum, item) => sum + item.amount, 0);
+    totalSalesAmount.value = total > 0 ? total : '';
+    totalSalesAmount.readOnly = true;
+}
+
+function renderSelectedExpenses() {
+    if (!selectedExpensesContainer) return;
+    const previousRows = getSelectedExpenseRows();
+    const previousAmounts = new Map(previousRows.map(item => [item.name, item.amount]));
+
+    if (selectedExpenseShortcuts.length === 0) {
+        selectedExpensesContainer.style.display = 'none';
+        selectedExpensesContainer.innerHTML = '';
+        updateSelectedExpensesTotal();
+        return;
+    }
+
+    selectedExpensesContainer.style.display = 'grid';
+    selectedExpensesContainer.innerHTML = '';
+
+    selectedExpenseShortcuts.forEach(name => {
+        const row = document.createElement('div');
+        row.className = 'selected-expense-row';
+
+        const label = document.createElement('div');
+        label.className = 'selected-expense-name';
+        label.textContent = name;
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'selected-expense-amount';
+        input.dataset.expenseName = name;
+        input.min = '0';
+        input.step = '0.5';
+        input.placeholder = 'Costo';
+        input.required = true;
+        const previousAmount = previousAmounts.get(name);
+        if (previousAmount > 0) input.value = String(previousAmount);
+
+        row.append(label, input);
+        selectedExpensesContainer.appendChild(row);
+    });
+
+    selectedExpensesContainer.querySelectorAll('.selected-expense-amount').forEach(input => {
+        input.addEventListener('input', updateSelectedExpensesTotal);
+    });
+    updateSelectedExpensesTotal();
+}
+
+function toggleExpenseShortcut(name) {
+    if (editingTransactionId) {
+        showToast("En edición usa la descripción y el monto del registro actual");
+        return;
+    }
+
+    const exists = selectedExpenseShortcuts.includes(name);
+    selectedExpenseShortcuts = exists
+        ? selectedExpenseShortcuts.filter(item => item !== name)
+        : [...selectedExpenseShortcuts, name];
+
+    renderExpenseTags();
+    renderSelectedExpenses();
+    toggleFormType('expense');
+}
+
+function resetSelectedExpenses() {
+    selectedExpenseShortcuts = [];
+    renderExpenseTags();
+    renderSelectedExpenses();
+    totalSalesAmount.readOnly = false;
 }
 
 function toggleFormType(type) {
@@ -2383,10 +2539,12 @@ function toggleFormType(type) {
         extraSalesFields.style.display = 'block';
         document.getElementById('desc-group').style.display = 'none';
         document.getElementById('amount-label').textContent = 'Total Editable de la Venta ($)' ;
+        totalSalesAmount.readOnly = false;
     } else {
         extraSalesFields.style.display = 'none';
         document.getElementById('desc-group').style.display = 'block';
-        document.getElementById('amount-label').textContent = 'Monto del Gasto ($)' ;
+        document.getElementById('amount-label').textContent = selectedExpenseShortcuts.length > 0 ? 'Total de Gastos ($)' : 'Monto del Gasto ($)' ;
+        updateSelectedExpensesTotal();
     }
 }
 
@@ -2453,12 +2611,7 @@ async function handleFormSubmit(e) {
     const amount = parseFloat(totalSalesAmount.value) || 0;
     const dateVal = document.getElementById('date').value;
 
-    // Almacenar string ISO completo basado en la hora local para evitar offsets raros.
-    const nowLocal = new Date();
-    const [yy, mm, dd] = dateVal.split('-');
-    nowLocal.setFullYear(parseInt(yy), parseInt(mm) - 1, parseInt(dd));
-
-    const dateObj = nowLocal;
+    const dateObj = createLocalDateFromInput(dateVal);
 
 
     let desc = "";
@@ -2490,6 +2643,38 @@ async function handleFormSubmit(e) {
         category = "Venta";
         desc = itemsSold.length > 0 ? itemsSold.join(', ') : "Venta General";
     } else {
+        const selectedExpenses = getSelectedExpenseRows();
+        if (selectedExpenses.length > 0) {
+            const invalidExpense = selectedExpenses.find(item => item.amount <= 0);
+            if (invalidExpense) {
+                showToast(`Agrega el costo de ${invalidExpense.name}`);
+                return;
+            }
+
+            if (!db) {
+                showToast("Firebase No Configurado");
+                return;
+            }
+
+            selectedExpenses.forEach(item => {
+                const expenseTx = {
+                    type: 'expense',
+                    amount: item.amount,
+                    desc: item.name,
+                    category: 'Gastos (General)',
+                    zone: '',
+                    itemsSoldArray: [],
+                    date: dateObj.toISOString(),
+                    createdAt: new Date().toISOString()
+                };
+                addDoc(collection(db, "transactions"), expenseTx).catch(err => console.error("Error agregando gasto:", err));
+            });
+
+            showToast(`${selectedExpenses.length} gastos guardados con éxito`);
+            closeModal();
+            return;
+        }
+
         desc = document.getElementById('description').value || "Gasto sin descripción";
         category = "Gastos (General)";
     }
@@ -2607,6 +2792,15 @@ function getFilteredData() {
     });
 }
 
+function setCollapsibleSectionState(panel, button, isVisible) {
+    if (panel) panel.classList.toggle('collapsed', !isVisible);
+    if (!button) return;
+
+    button.innerHTML = isVisible
+        ? '<i class="ph ph-eye-slash"></i> Ocultar'
+        : '<i class="ph ph-eye"></i> Mostrar';
+}
+
 function updateDashboard() {
     const data = getFilteredData();
 
@@ -2620,21 +2814,25 @@ function updateDashboard() {
     summaryExpense.textContent = formatMoney(gastos);
     summaryProfit.textContent = formatMoney(ingresos - gastos);
 
+    setCollapsibleSectionState(recentTransactionsPanel, btnToggleRecentTransactions, recentTransactionsVisible);
     recentTbody.innerHTML = '';
-    const recent = [...data].sort((a, b) => {
-        const dateA = a.date ? new Date(a.date).getTime() : 0;
-        const dateB = b.date ? new Date(b.date).getTime() : 0;
-        return dateB - dateA;
-    });
-    if (recent.length === 0) {
-        recentTbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted)">Aún no hay transacciones</td></tr>`;
-    } else {
-        recent.forEach(t => recentTbody.appendChild(createRow(t, false)));
+    if (recentTransactionsVisible) {
+        const recent = [...data].sort((a, b) => {
+            const dateA = a.date ? new Date(a.date).getTime() : 0;
+            const dateB = b.date ? new Date(b.date).getTime() : 0;
+            return dateB - dateA;
+        });
+        if (recent.length === 0) {
+            recentTbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted)">Aún no hay transacciones</td></tr>`;
+        } else {
+            recent.forEach(t => recentTbody.appendChild(createRow(t, false)));
+        }
     }
 
     updateCharts(data);
     renderTopSellers(data);
     renderBranchSalesSummary(data);
+    renderProductsPeriodSummary(data);
 }
 
 function getItemsForTransaction(transaction) {
@@ -2758,7 +2956,76 @@ function getTopSellerStats(data) {
         });
 }
 
+function getProductsPeriodStats(data) {
+    const productStats = {};
+
+    data
+        .filter(transaction => transaction.type === 'income')
+        .forEach(transaction => {
+            getItemsForTransaction(transaction).forEach(item => {
+                if (!item.name || item.qty <= 0) return;
+
+                const aggregation = getAggregationMeta(item.name);
+                if (!productStats[aggregation.key]) {
+                    productStats[aggregation.key] = {
+                        label: aggregation.label,
+                        qty: 0
+                    };
+                }
+
+                productStats[aggregation.key].qty += Number(item.qty) || 0;
+            });
+        });
+
+    return Object.values(productStats)
+        .filter(item => item.qty > 0)
+        .sort((a, b) => {
+            if (b.qty !== a.qty) return b.qty - a.qty;
+            return a.label.localeCompare(b.label, 'es');
+        });
+}
+
+function renderProductsPeriodSummary(data) {
+    if (!dailyProductsList) return;
+
+    if (dailyProductsTitle) {
+        dailyProductsTitle.textContent = `Resumen de productos - ${getFilterLabel()}`;
+    }
+
+    const periodProducts = getProductsPeriodStats(data);
+
+    dailyProductsList.innerHTML = '';
+    if (periodProducts.length === 0) {
+        dailyProductsList.innerHTML = `
+            <div class="daily-products-empty">
+                Sin productos vendidos en este periodo
+            </div>
+        `;
+        return;
+    }
+
+    periodProducts.forEach(product => {
+        const row = document.createElement('div');
+        row.className = 'daily-product-item';
+
+        const name = document.createElement('span');
+        name.textContent = product.label;
+
+        const qty = document.createElement('strong');
+        qty.textContent = product.qty;
+
+        row.append(name, qty);
+        dailyProductsList.appendChild(row);
+    });
+}
+
 function renderTopSellers(data) {
+    setCollapsibleSectionState(topSellersPanel, btnToggleTopSellers, topSellersVisible);
+    if (!topSellersVisible) {
+        topSellersTbody.innerHTML = '';
+        return;
+    }
+
     const sorted = getTopSellerStats(data);
 
     topSellersTbody.innerHTML = '';
@@ -2773,6 +3040,62 @@ function renderTopSellers(data) {
                 <td style="font-weight: 500;">${stats.label || name}</td>
                 <td class="align-right">${stats.qty}</td>
                 <td class="align-right text-success">${formatMoney(stats.total)}</td>
+            </tr>
+        `;
+    });
+}
+
+function getTopExpenseStats(data) {
+    const expenseStats = {};
+
+    data
+        .filter(transaction => transaction.type === 'expense')
+        .forEach(transaction => {
+            const label = (transaction.desc || transaction.category || 'Gasto sin descripción').trim();
+            const key = normalizeText(label) || 'gasto-sin-descripcion';
+
+            if (!expenseStats[key]) {
+                expenseStats[key] = {
+                    label,
+                    count: 0,
+                    total: 0
+                };
+            }
+
+            expenseStats[key].count += 1;
+            expenseStats[key].total += Number(transaction.amount) || 0;
+        });
+
+    return Object.entries(expenseStats)
+        .sort((a, b) => {
+            if (b[1].total !== a[1].total) return b[1].total - a[1].total;
+            return b[1].count - a[1].count;
+        });
+}
+
+function renderTopExpenses(data) {
+    if (!topExpensesTbody) return;
+
+    setCollapsibleSectionState(topExpensesPanel, btnToggleTopExpenses, topExpensesVisible);
+    if (!topExpensesVisible) {
+        topExpensesTbody.innerHTML = '';
+        return;
+    }
+
+    const sorted = getTopExpenseStats(data);
+
+    topExpensesTbody.innerHTML = '';
+    if (sorted.length === 0) {
+        topExpensesTbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Sin gastos para mostrar</td></tr>`;
+        return;
+    }
+
+    sorted.forEach(([name, stats]) => {
+        topExpensesTbody.innerHTML += `
+            <tr>
+                <td style="font-weight: 500;">${stats.label || name}</td>
+                <td class="align-right">${stats.count}</td>
+                <td class="align-right text-danger">${formatMoney(stats.total)}</td>
             </tr>
         `;
     });
@@ -2829,14 +3152,47 @@ function createRow(t, showDelete = true) {
     return tr;
 }
 
+function getHistorySearchText(transaction) {
+    const dateText = formatExportDate(transaction.date);
+    const typeText = transaction.type === 'income' ? 'venta ingreso' : 'gasto egreso';
+    const amountText = String(transaction.amount || '');
+
+    return normalizeText([
+        dateText,
+        typeText,
+        transaction.desc,
+        transaction.category,
+        transaction.zone,
+        amountText
+    ].filter(Boolean).join(' '));
+}
+
 function renderFullHistory() {
     renderTopSellers(transactions);
+    renderTopExpenses(transactions);
+    setCollapsibleSectionState(historyTransactionsPanel, btnToggleHistoryTransactions, historyTransactionsVisible);
+    if (historyTypeFilterSelect && historyTypeFilterSelect.value !== historyTypeFilter) {
+        historyTypeFilterSelect.value = historyTypeFilter;
+    }
+    if (historySearchInput && historySearchInput.value !== historySearchTerm) {
+        historySearchInput.value = historySearchTerm;
+    }
     historyTbody.innerHTML = '';
-    if (transactions.length === 0) {
+    if (!historyTransactionsVisible) return;
+
+    const normalizedSearch = normalizeText(historySearchTerm);
+    const visibleTransactions = historyTypeFilter === 'all'
+        ? transactions
+        : transactions.filter(transaction => transaction.type === historyTypeFilter);
+    const filteredTransactions = normalizedSearch
+        ? visibleTransactions.filter(transaction => getHistorySearchText(transaction).includes(normalizedSearch))
+        : visibleTransactions;
+
+    if (filteredTransactions.length === 0) {
         historyTbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted)">Aún no hay transacciones</td></tr>`;
         return;
     }
-    transactions.forEach(t => historyTbody.appendChild(createRow(t, true)));
+    filteredTransactions.forEach(t => historyTbody.appendChild(createRow(t, true)));
 }
 
 // Charts Logic

@@ -19,7 +19,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/styles.css?v=1.2">
+    <link rel="stylesheet" href="css/styles.css?v=1.4">
     
     <!-- Phosphor Icons (Sleek Icons) -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
@@ -146,14 +146,29 @@
                         <div id="branch-sales-list" class="branch-sales-list"></div>
                     </div>
                 </section>
+
+                <!-- Daily Product Summary -->
+                <section class="daily-products-section">
+                    <div class="section-header">
+                        <h3 id="daily-products-title">Resumen de productos del día</h3>
+                    </div>
+                    <div id="daily-products-list" class="daily-products-list">
+                        <!-- js injected -->
+                    </div>
+                </section>
                 
                 <!-- Recent Transactions Mini Table -->
                 <section class="recent-transactions mt-2">
                     <div class="section-header">
                         <h3>Transacciones Recientes</h3>
-                        <button class="btn-text" id="btn-view-all">Ver todas</button>
+                        <div class="section-actions">
+                            <button class="btn-text" id="btn-toggle-recent-transactions" type="button">
+                                <i class="ph ph-eye"></i> Mostrar
+                            </button>
+                            <button class="btn-text" id="btn-view-all">Ver todas</button>
+                        </div>
                     </div>
-                    <div class="table-container">
+                    <div class="table-container collapsible-content collapsed" id="recent-transactions-panel">
                         <table class="transactions-table">
                             <thead>
                                 <tr>
@@ -176,8 +191,11 @@
                 <section class="recent-transactions full-height mt-2">
                     <div class="section-header">
                         <h3>Productos Vendidos</h3>
+                        <button class="btn-text" id="btn-toggle-top-sellers" type="button">
+                            <i class="ph ph-eye"></i> Mostrar
+                        </button>
                     </div>
-                    <div class="table-container large-table">
+                    <div class="table-container large-table collapsible-content collapsed" id="top-sellers-panel">
                         <table class="transactions-table">
                             <thead>
                                 <tr>
@@ -193,7 +211,44 @@
                 </section>
 
                 <section class="recent-transactions full-height">
-                    <div class="table-container large-table">
+                    <div class="section-header">
+                        <h3>Gastos por Concepto</h3>
+                        <button class="btn-text" id="btn-toggle-top-expenses" type="button">
+                            <i class="ph ph-eye"></i> Mostrar
+                        </button>
+                    </div>
+                    <div class="table-container large-table collapsible-content collapsed" id="top-expenses-panel">
+                        <table class="transactions-table">
+                            <thead>
+                                <tr>
+                                    <th>Concepto</th>
+                                    <th class="align-right">Veces Registrado</th>
+                                    <th class="align-right">Total Gastado</th>
+                                </tr>
+                            </thead>
+                            <tbody id="top-expenses-tbody">
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="recent-transactions full-height">
+                    <div class="section-header">
+                        <h3>Historial de ventas y gastos</h3>
+                        <div class="section-actions">
+                            <label class="compact-filter-label" for="history-type-filter">Ver</label>
+                            <select id="history-type-filter" class="compact-filter-select">
+                                <option value="all">Todos</option>
+                                <option value="income">Ventas</option>
+                                <option value="expense">Gastos</option>
+                            </select>
+                            <input type="search" id="history-search" class="compact-search-input" placeholder="Buscar...">
+                            <button class="btn-text" id="btn-toggle-history-transactions" type="button">
+                                <i class="ph ph-eye"></i> Mostrar
+                            </button>
+                        </div>
+                    </div>
+                    <div class="table-container large-table collapsible-content collapsed" id="history-transactions-panel">
                         <table class="transactions-table">
                             <thead>
                                 <tr>
@@ -349,6 +404,11 @@
                 <select id="sale-branch-select"></select>
             </div>
 
+            <div class="form-group">
+                <label for="sale-date-input">Fecha de la venta</label>
+                <input type="date" id="sale-date-input" required>
+            </div>
+
             <div id="sale-table-banner" class="table-banner" style="display:none;"></div>
 
             <div class="sale-mobile-switch" id="sale-mobile-switch">
@@ -460,10 +520,13 @@
                         <div id="expense-tags-container" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
                             <!-- Injected tags -->
                         </div>
+                        <div id="selected-expenses-container" class="selected-expenses-container" style="display:none;">
+                            <!-- js injected -->
+                        </div>
                     </div>
                     <div class="form-group">
-                        <label for="description">Descripción Final del Gasto</label>
-                        <input type="text" id="description" placeholder="Haz clic en un atajo o escribe aquí...">
+                        <label for="description">Descripción manual del gasto</label>
+                        <input type="text" id="description" placeholder="Úsalo si no seleccionas atajos...">
                     </div>
                 </div>
 
@@ -494,11 +557,9 @@
     <script src="https://npmcdn.com/flatpickr/dist/l10n/es.js"></script>
     
     <!-- Firebase SDK (Modular) -->
-    <script type="module" src="js/firebase-config.js?v=1.2"></script>
+    <script type="module" src="js/firebase-config.js?v=1.4"></script>
     
     <!-- App Logic -->
-    <script type="module" src="js/app.js?v=1.2"></script>
+    <script type="module" src="js/app.js?v=1.4"></script>
 </body>
 </html>
-
-
