@@ -215,6 +215,44 @@ h1 {
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
+.custom-date-filter {
+    margin-left: 0.5rem;
+    border-left: 1px solid var(--border-color);
+    padding-left: 0.5rem;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+}
+
+.custom-date-trigger {
+    width: 2.35rem;
+    height: 2.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1.15rem;
+    transition: var(--transition);
+}
+
+.custom-date-trigger:hover,
+.custom-date-trigger.active {
+    background-color: var(--bg-surface-elevated);
+    color: var(--text-main);
+}
+
+.custom-date-input-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+}
+
 /* Views Management */
 .view {
     display: none;

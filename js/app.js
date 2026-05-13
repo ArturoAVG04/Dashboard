@@ -14,6 +14,7 @@ let customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(loadLoc
 let customBranches = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.branches, INITIAL_ZONES), 'branch'));
 let customCategories = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.categories, INITIAL_CATEGORIES), 'cat'));
 let openTables = normalizeOpenTables(loadLocalState(STORAGE_KEYS.openTables, []));
+let branchColorMap = loadLocalState(STORAGE_KEYS.branchColors, {});
 
 let customStartDate = null;
 let customEndDate = null;
@@ -37,6 +38,13 @@ let topExpensesVisible = false;
 let historyTypeFilter = 'all';
 let historySearchTerm = '';
 let selectedExpenseShortcuts = [];
+let customDatePicker = null;
+
+const BRANCH_COLOR_PALETTE = [
+    '#10b981', '#0ea5e9', '#f59e0b', '#f97316', '#8b5cf6', '#14b8a6',
+    '#ef4444', '#ec4899', '#84cc16', '#06b6d4', '#a855f7', '#eab308',
+    '#22c55e', '#3b82f6', '#f43f5e', '#64748b'
+];
 
 // DOM Elements
 const views = {
@@ -101,6 +109,7 @@ const zoneSelect = document.getElementById('zone-select');
 const totalSalesAmount = document.getElementById('amount');
 
 const filterBtns = document.querySelectorAll('.filter-btn');
+const customDateTrigger = document.getElementById('custom-date-trigger');
 
 // Dynamic Form Elements
 const btnToggleAddProduct = document.getElementById('toggle-add-product');
@@ -262,6 +271,27 @@ function productAvailableInBranch(product, branchId) {
         || product.availableInBranches.includes(branchId);
 }
 
+function getBranchColorKey(branch) {
+    return branch?.id || `branch:${normalizeText(branch?.name || '')}`;
+}
+
+function createGeneratedBranchColor(index) {
+    const hue = (index * 47) % 360;
+    return `hsl(${hue}, 72%, 52%)`;
+}
+
+function getStableBranchColor(branch) {
+    const key = getBranchColorKey(branch);
+    if (!key) return '#334155';
+    if (branchColorMap[key]) return branchColorMap[key];
+
+    const usedColors = new Set(Object.values(branchColorMap));
+    const paletteColor = BRANCH_COLOR_PALETTE.find(color => !usedColors.has(color));
+    branchColorMap[key] = paletteColor || createGeneratedBranchColor(usedColors.size);
+    saveLocalState(STORAGE_KEYS.branchColors, branchColorMap);
+    return branchColorMap[key];
+}
+
 // Init App
 function init() {
     if ('scrollRestoration' in history) {
@@ -271,16 +301,18 @@ function init() {
     try {
         console.log("Iniciando aplicación...");
         if (document.getElementById('flatpickr-range')) {
-            flatpickr("#flatpickr-range", {
+            customDatePicker = flatpickr("#flatpickr-range", {
                 mode: "range",
                 locale: "es",
                 dateFormat: "d M Y",
+                positionElement: customDateTrigger || undefined,
                 onChange: function (selectedDates) {
                     if (selectedDates.length === 2) {
                         customStartDate = selectedDates[0];
                         customEndDate = selectedDates[1];
                         currentFilter = 'custom';
                         document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => btn.classList.remove('active'));
+                        customDateTrigger?.classList.add('active');
                         updateDashboard();
                         if (views.transactions.classList.contains('active-view')) renderFullHistory();
                     }
@@ -741,6 +773,9 @@ function setupEventListeners() {
     navBtns.products.addEventListener('click', () => switchView('products'));
     navBtns.backup.addEventListener('click', () => switchView('backup'));
     btnViewAll.addEventListener('click', () => switchView('transactions'));
+    customDateTrigger?.addEventListener('click', () => {
+        customDatePicker?.open();
+    });
     btnToggleRecentTransactions?.addEventListener('click', () => {
         recentTransactionsVisible = !recentTransactionsVisible;
         updateDashboard();
@@ -820,6 +855,7 @@ function setupEventListeners() {
             filterBtns.forEach(b => {
                 if (b.dataset.filter) b.classList.remove('active');
             });
+            customDateTrigger?.classList.remove('active');
             tgt.classList.add('active');
             currentFilter = tgt.dataset.filter;
             updateDashboard();
@@ -3265,6 +3301,7 @@ function updateCharts(data) {
     const branchBreakdown = customBranches
         .map(branch => ({
             name: branch.name,
+            color: getStableBranchColor(branch),
             total: data
                 .filter(item => item.type === 'income' && item.zone === branch.name)
                 .reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
@@ -3279,7 +3316,7 @@ function updateCharts(data) {
             labels: branchBreakdown.map(item => item.name),
             datasets: [{
                 data: branchBreakdown.map(item => item.total),
-                backgroundColor: ['#10b981', '#0ea5e9', '#f59e0b', '#f97316', '#8b5cf6', '#14b8a6'],
+                backgroundColor: branchBreakdown.map(item => item.color),
                 borderWidth: 0
             }]
         };

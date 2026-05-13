@@ -19,7 +19,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="css/styles.css?v=1.4">
+    <link rel="stylesheet" href="css/styles.css?v=1.5">
     
     <!-- Phosphor Icons (Sleek Icons) -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
@@ -93,9 +93,11 @@
                     <button class="filter-btn" data-filter="month">Mes</button>
                     <button class="filter-btn" data-filter="year">Año</button>
                     <button class="filter-btn" data-filter="all">Todos</button>
-                    <div class="custom-date-filter" style="margin-left: 0.5rem; border-left: 1px solid var(--border-color); padding-left: 0.5rem; flex-shrink: 0; display: flex; align-items: center;">
-                        <i class="ph ph-calendar-blank" style="color: var(--text-muted); margin-right: 0.5rem; font-size: 1.1rem;"></i>
-                        <input type="text" id="flatpickr-range" class="date-input-mobile" placeholder="Fechas personalizadas..." readonly style="cursor: pointer;">
+                    <div class="custom-date-filter">
+                        <button type="button" id="custom-date-trigger" class="custom-date-trigger" aria-label="Seleccionar fechas personalizadas" title="Fechas personalizadas">
+                            <i class="ph ph-calendar-blank"></i>
+                        </button>
+                        <input type="text" id="flatpickr-range" class="custom-date-input-hidden" readonly tabindex="-1" aria-hidden="true">
                     </div>
                 </div>
             </header>
@@ -548,7 +550,6 @@
 
     <!-- Libraries (CDN) -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/date-fns.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
@@ -556,10 +557,7 @@
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script src="https://npmcdn.com/flatpickr/dist/l10n/es.js"></script>
     
-    <!-- Firebase SDK (Modular) -->
-    <script type="module" src="js/firebase-config.js?v=1.4"></script>
-    
     <!-- App Logic -->
-    <script type="module" src="js/app.js?v=1.4"></script>
+    <script type="module" src="js/app.js?v=1.5"></script>
 </body>
 </html>

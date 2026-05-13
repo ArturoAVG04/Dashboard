@@ -5,7 +5,8 @@ export const STORAGE_KEYS = {
     branches: 'customBranches',
     categories: 'customCategories',
     openTables: 'openTables',
-    lastBranch: 'lastSelectedBranch'
+    lastBranch: 'lastSelectedBranch',
+    branchColors: 'branchColorMap'
 };
 
 function parseJSON(value, fallback) {
@@ -20,9 +21,18 @@ function parseJSON(value, fallback) {
 }
 
 export function loadLocalState(key, fallback) {
-    return parseJSON(localStorage.getItem(key), fallback);
+    try {
+        return parseJSON(localStorage.getItem(key), fallback);
+    } catch (error) {
+        console.warn('No se pudo acceder al almacenamiento local:', error);
+        return fallback;
+    }
 }
 
 export function saveLocalState(key, value) {
-    localStorage.setItem(key, JSON.stringify(value));
+    try {
+        localStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+        console.warn('No se pudo guardar en almacenamiento local:', error);
+    }
 }
