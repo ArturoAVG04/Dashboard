@@ -12,7 +12,7 @@ let charts = { main: null, category: null };
 let customProducts = normalizeProducts(loadLocalState(STORAGE_KEYS.products, INITIAL_PRODUCTS));
 let customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS)));
 let customBranches = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.branches, INITIAL_ZONES), 'branch'));
-let customCategories = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.categories, INITIAL_CATEGORIES), 'cat'));
+let customCategories = normalizeNamedList(loadLocalState(STORAGE_KEYS.categories, INITIAL_CATEGORIES), 'cat').sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
 let openTables = normalizeOpenTables(loadLocalState(STORAGE_KEYS.openTables, []));
 let branchColorMap = loadLocalState(STORAGE_KEYS.branchColors, {});
 
@@ -36,6 +36,7 @@ let historyTransactionsVisible = false;
 let topSellersVisible = false;
 let topExpensesVisible = false;
 let historyTypeFilter = 'all';
+let mainTypeFilter = 'all';
 let historySearchTerm = '';
 let selectedExpenseShortcuts = [];
 let customDatePicker = null;
@@ -266,9 +267,17 @@ function getBranchNameById(branchId) {
 
 function productAvailableInBranch(product, branchId) {
     if (!product || !branchId) return true;
-    return !Array.isArray(product.availableInBranches)
-        || product.availableInBranches.length === 0
-        || product.availableInBranches.includes(branchId);
+    if (!Array.isArray(product.availableInBranches) || product.availableInBranches.length === 0) {
+        return true;
+    }
+
+    const branch = getBranchById(branchId);
+    const branchName = branch ? branch.name : '';
+
+    return product.availableInBranches.some(b => {
+        if (!b) return false;
+        return b === branchId || (branchName && b === branchName) || (branch && b === branch.id);
+    });
 }
 
 function getBranchColorKey(branch) {
@@ -610,10 +619,11 @@ function subscribeCategories() {
             return;
         }
 
-        customCategories = sortNamedListAlphabetically(normalizeNamedList(snapshot.docs.map(item => ({
+        const normalizedCats = normalizeNamedList(snapshot.docs.map(item => ({
             ...item.data(),
             id: item.id
-        })), 'cat'));
+        })), 'cat');
+        customCategories = [...normalizedCats].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
         saveLocalState(STORAGE_KEYS.categories, customCategories);
         renderCategoryOptions();
         renderProductsList();
@@ -803,6 +813,28 @@ function setupEventListeners() {
         renderFullHistory();
     });
 
+    // Main Type Filter (Ambas, Solo Ventas, Solo Gastos)
+    const mainTypeFilters = document.getElementById('main-type-filters');
+    if (mainTypeFilters) {
+        mainTypeFilters.addEventListener('click', (event) => {
+            const btn = event.target.closest('[data-type-filter]');
+            if (!btn) return;
+            mainTypeFilter = btn.dataset.typeFilter || 'all';
+            mainTypeFilters.querySelectorAll('.type-filter-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.typeFilter === mainTypeFilter);
+            });
+            updateDashboard();
+            if (views.transactions.classList.contains('active-view')) {
+                renderFullHistory();
+            }
+        });
+    }
+
+    // Sort A-Z Buttons for Products and Categories
+    document.getElementById('btn-sort-products-az')?.addEventListener('click', sortProductsAlphabetically);
+    document.getElementById('btn-sort-categories-az')?.addEventListener('click', sortCategoriesAlphabetically);
+    document.getElementById('products-branch-filter')?.addEventListener('change', renderManageProducts);
+
     // Exports
     document.getElementById('btn-export-image').addEventListener('click', downloadImageSummary);
     document.getElementById('btn-export-csv').addEventListener('click', downloadCSV);
@@ -826,7 +858,13 @@ function setupEventListeners() {
     }
 
     if (tablesBranchFilter) {
-        tablesBranchFilter.addEventListener('change', renderTablesView);
+        tablesBranchFilter.addEventListener('change', () => {
+            renderTablesView();
+            if (tablesBranchFilter.value) {
+                saveLocalState(STORAGE_KEYS.lastBranch, tablesBranchFilter.value);
+                renderManageProducts();
+            }
+        });
     }
 
     if (btnRefreshTables) {
@@ -1002,6 +1040,15 @@ function setupEventListeners() {
             if (!actionButton) return;
 
             const { action, id } = actionButton.dataset;
+
+            if (action === 'category-move') {
+                const index = Number(actionButton.dataset.index);
+                const dir = Number(actionButton.dataset.dir);
+                const targetIndex = index + dir;
+                if (targetIndex >= 0 && targetIndex < customCategories.length) {
+                    reorderCategories(index, targetIndex);
+                }
+            }
 
             if (action === 'category-edit') {
                 startEditingCategory(id);
@@ -1277,23 +1324,213 @@ function renderProductsList() {
     });
 }
 
-function renderManageProducts() {
-    manageProductsList.innerHTML = '';
+function initDragAndDropContainer(container, itemSelector, onReorder) {
+    if (!container) return;
 
-    // Make sure it looks like a grid
+    let dragSrcIndex = -1;
+    const cards = container.querySelectorAll(itemSelector);
+
+    cards.forEach(card => {
+        card.addEventListener('dragstart', (e) => {
+            dragSrcIndex = parseInt(card.getAttribute('data-index'), 10);
+            card.classList.add('dragging');
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', String(dragSrcIndex));
+            }
+        });
+
+        card.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            card.classList.add('drag-over');
+        });
+
+        card.addEventListener('dragleave', () => {
+            card.classList.remove('drag-over');
+        });
+
+        card.addEventListener('drop', (e) => {
+            e.preventDefault();
+            card.classList.remove('drag-over');
+            let srcIndex = dragSrcIndex;
+            if (e.dataTransfer) {
+                try {
+                    const dataVal = e.dataTransfer.getData('text/plain');
+                    if (dataVal !== '' && !isNaN(parseInt(dataVal, 10))) {
+                        srcIndex = parseInt(dataVal, 10);
+                    }
+                } catch (err) { }
+            }
+            const targetIndex = parseInt(card.getAttribute('data-index'), 10);
+            if (srcIndex !== -1 && targetIndex !== -1 && srcIndex !== targetIndex) {
+                onReorder(srcIndex, targetIndex);
+            }
+        });
+
+        card.addEventListener('dragend', () => {
+            cards.forEach(el => el.classList.remove('dragging', 'drag-over'));
+            dragSrcIndex = -1;
+        });
+
+        // Touch events for mobile/tablet drag handles
+        const handle = card.querySelector('.drag-handle');
+        if (!handle) return;
+
+        let touchActiveCard = null;
+        let touchSrcIndex = -1;
+
+        handle.addEventListener('touchstart', (e) => {
+            touchActiveCard = card;
+            touchSrcIndex = parseInt(card.getAttribute('data-index'), 10);
+            card.classList.add('dragging');
+        }, { passive: true });
+
+        handle.addEventListener('touchmove', (e) => {
+            if (!touchActiveCard) return;
+            const touch = e.touches[0];
+            const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+            cards.forEach(el => el.classList.remove('drag-over'));
+            if (elem) {
+                const targetCard = elem.closest(itemSelector);
+                if (targetCard && targetCard !== touchActiveCard) {
+                    targetCard.classList.add('drag-over');
+                }
+            }
+        }, { passive: false });
+
+        handle.addEventListener('touchend', (e) => {
+            if (!touchActiveCard) return;
+            touchActiveCard.classList.remove('dragging');
+            const touch = e.changedTouches[0];
+            const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+            cards.forEach(el => el.classList.remove('drag-over'));
+
+            if (elem) {
+                const targetCard = elem.closest(itemSelector);
+                if (targetCard && targetCard !== touchActiveCard) {
+                    const targetIndex = parseInt(targetCard.getAttribute('data-index'), 10);
+                    if (touchSrcIndex !== -1 && targetIndex !== -1 && touchSrcIndex !== targetIndex) {
+                        onReorder(touchSrcIndex, targetIndex);
+                    }
+                }
+            }
+            touchActiveCard = null;
+            touchSrcIndex = -1;
+        });
+    });
+}
+
+function reorderProducts(fromIndex, toIndex) {
+    if (fromIndex < 0 || fromIndex >= customProducts.length) return;
+    if (toIndex < 0 || toIndex >= customProducts.length) return;
+
+    const [moved] = customProducts.splice(fromIndex, 1);
+    customProducts.splice(toIndex, 0, moved);
+    saveProductsState();
+}
+
+function reorderCategories(fromIndex, toIndex) {
+    if (fromIndex < 0 || fromIndex >= customCategories.length) return;
+    if (toIndex < 0 || toIndex >= customCategories.length) return;
+
+    const [moved] = customCategories.splice(fromIndex, 1);
+    customCategories.splice(toIndex, 0, moved);
+    saveCategoriesState();
+}
+
+function sortProductsAlphabetically() {
+    const productsBranchSelect = document.getElementById('products-branch-filter');
+    const selectedBranchId = productsBranchSelect ? productsBranchSelect.value : '';
+
+    if (selectedBranchId) {
+        const branchObj = getBranchById(selectedBranchId);
+        const branchName = branchObj ? branchObj.name : 'la sucursal';
+
+        const subset = customProducts.filter(p => productAvailableInBranch(p, selectedBranchId));
+        if (subset.length === 0) {
+            showToast("No hay productos en esta sucursal");
+            return;
+        }
+
+        const sortedSubset = [...subset].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+
+        let subIdx = 0;
+        customProducts = customProducts.map(p => {
+            if (productAvailableInBranch(p, selectedBranchId)) {
+                return sortedSubset[subIdx++];
+            }
+            return p;
+        });
+
+        saveProductsState();
+        showToast(`Productos de ${branchName} ordenados A-Z`);
+    } else {
+        customProducts = sortNamedListAlphabetically(customProducts);
+        saveProductsState();
+        showToast("Todos los productos ordenados A-Z");
+    }
+}
+
+function sortCategoriesAlphabetically() {
+    customCategories = sortNamedListAlphabetically(customCategories);
+    saveCategoriesState();
+    showToast("Categorías ordenadas alfabéticamente");
+}
+
+function renderManageProducts() {
+    if (!manageProductsList) return;
+
+    const productsBranchSelect = document.getElementById('products-branch-filter');
+    if (productsBranchSelect && customBranches.length > 0) {
+        const currentVal = productsBranchSelect.value;
+        const lastBranch = localStorage.getItem(STORAGE_KEYS.lastBranch) || '';
+        
+        productsBranchSelect.innerHTML = '<option value="">Todas las sucursales</option>' +
+            customBranches.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+
+        if (currentVal && Array.from(productsBranchSelect.options).some(o => o.value === currentVal)) {
+            productsBranchSelect.value = currentVal;
+        } else if (lastBranch && Array.from(productsBranchSelect.options).some(o => o.value === lastBranch)) {
+            productsBranchSelect.value = lastBranch;
+        } else {
+            productsBranchSelect.value = '';
+        }
+    }
+
+    const selectedBranchId = productsBranchSelect ? productsBranchSelect.value : '';
+
+    const filteredProducts = selectedBranchId
+        ? customProducts.filter(p => productAvailableInBranch(p, selectedBranchId))
+        : customProducts;
+
+    manageProductsList.innerHTML = '';
     manageProductsList.className = 'view-products-grid';
 
-    customProducts.forEach((p, index) => {
+    if (filteredProducts.length === 0) {
+        manageProductsList.innerHTML = `<div class="card" style="grid-column:1/-1; text-align:center; color:var(--text-muted); padding:2rem;">No hay productos registrados ${selectedBranchId ? 'para esta sucursal' : ''}.</div>`;
+        return;
+    }
+
+    filteredProducts.forEach((p) => {
+        const realIndex = customProducts.findIndex(item => item.id === p.id);
         const div = document.createElement('div');
         div.className = 'product-manage-card';
+        div.setAttribute('draggable', 'true');
+        div.setAttribute('data-id', p.id);
+        div.setAttribute('data-index', realIndex);
+
         div.innerHTML = `
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <div style="display:flex; flex-direction:column; gap:0.25rem;">
-                    <button class="btn-icon" data-action="move" data-index="${index}" data-dir="-1" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
-                    <button class="btn-icon" data-action="move" data-index="${index}" data-dir="1" ${index === customProducts.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
+            <div style="display:flex; align-items:center; gap:0.5rem; flex-grow:1;">
+                <div class="drag-handle" title="Arrastrar para reordenar">
+                    <i class="ph ph-dots-six-vertical" style="font-size:1.3rem;"></i>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.2rem;">
+                    <button class="btn-icon" data-action="move" data-index="${realIndex}" data-dir="-1" ${realIndex === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
+                    <button class="btn-icon" data-action="move" data-index="${realIndex}" data-dir="1" ${realIndex === customProducts.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
                 </div>
                 <div>
-                    <div style="font-weight: 500;">${p.name} <small style="color:var(--text-muted)">(${p.category})</small></div>
+                    <div style="font-weight: 500;">${p.name} <small style="color:var(--text-muted)">(${p.category || 'Sin categoría'})</small></div>
                     <div style="color: var(--success); font-size: 0.9rem;">$${p.price}</div>
                     <div style="color: var(--text-muted); font-size: 0.8rem;">${Array.isArray(p.availableInBranches) && p.availableInBranches.length > 0 ? `${p.availableInBranches.length} sucursales asignadas` : 'Disponible en todas las sucursales'}</div>
                 </div>
@@ -1305,6 +1542,8 @@ function renderManageProducts() {
         `;
         manageProductsList.appendChild(div);
     });
+
+    initDragAndDropContainer(manageProductsList, '.product-manage-card', reorderProducts);
 }
 
 function saveProductsState() {
@@ -1360,7 +1599,7 @@ function saveBranchesState() {
 }
 
 function saveCategoriesState() {
-    customCategories = sortNamedListAlphabetically(customCategories);
+    customCategories = customCategories.map((category, index) => ({ ...category, order: index }));
     saveLocalState(STORAGE_KEYS.categories, customCategories);
     renderCategoryOptions();
     renderManageCategories();
@@ -1457,13 +1696,26 @@ function renderManageCategories() {
     manageCategoriesList.innerHTML = '';
     manageCategoriesList.className = 'view-products-grid';
 
-    customCategories.forEach(category => {
+    customCategories.forEach((category, index) => {
         const div = document.createElement('div');
-        div.className = 'product-manage-card';
+        div.className = 'product-manage-card category-manage-card';
+        div.setAttribute('draggable', 'true');
+        div.setAttribute('data-id', category.id);
+        div.setAttribute('data-index', index);
+
         div.innerHTML = `
-            <div>
-                <div style="font-weight: 500;">${category.name}</div>
-                <div style="color: var(--text-muted); font-size: 0.85rem;">Categoría disponible</div>
+            <div style="display:flex; align-items:center; gap:0.5rem; flex-grow:1;">
+                <div class="drag-handle" title="Arrastrar para reordenar">
+                    <i class="ph ph-dots-six-vertical" style="font-size:1.3rem;"></i>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.2rem;">
+                    <button class="btn-icon" data-action="category-move" data-index="${index}" data-dir="-1" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
+                    <button class="btn-icon" data-action="category-move" data-index="${index}" data-dir="1" ${index === customCategories.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
+                </div>
+                <div>
+                    <div style="font-weight: 500;">${category.name}</div>
+                    <div style="color: var(--text-muted); font-size: 0.85rem;">Categoría disponible</div>
+                </div>
             </div>
             <div style="display:flex; align-items:center; gap:0.5rem;">
                 <button class="btn-icon" data-action="category-edit" data-id="${category.id}"><i class="ph ph-pencil-simple"></i></button>
@@ -1472,6 +1724,8 @@ function renderManageCategories() {
         `;
         manageCategoriesList.appendChild(div);
     });
+
+    initDragAndDropContainer(manageCategoriesList, '.category-manage-card', reorderCategories);
 }
 
 function saveManagedCategory() {
@@ -2178,7 +2432,7 @@ function handleSaleTotalInput() {
     if (isStackedSaleLayout()) scrollSaleModalToTop('auto');
 }
 
-function buildIncomeTransaction({ branchId, items, total, source = 'sale', date = new Date() }) {
+function buildIncomeTransaction({ branchId, items, total, source = 'sale', date = new Date(), tableName = '' }) {
     const branch = getBranchById(branchId);
     const desc = items.length > 0
         ? items.map(item => `${item.qty}x ${item.name}`).join(', ')
@@ -2192,6 +2446,7 @@ function buildIncomeTransaction({ branchId, items, total, source = 'sale', date 
         branch: branchId || '',
         zone: branch?.name || '',
         branchId: branchId || '',
+        tableName: tableName || '',
         itemsSoldArray: items.map(item => ({
             productId: item.productId,
             name: item.name,
@@ -2286,14 +2541,49 @@ function saveOpenTablesState() {
     renderTablesView();
 }
 
+function getTodayTablesCount(branchId = '') {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const isToday = (dStr) => {
+        if (!dStr) return false;
+        try {
+            return new Date(dStr).toISOString().slice(0, 10) === todayStr;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    const openCount = openTables.filter(t => t.status === 'open' && (!branchId || t.branchId === branchId)).length;
+    const closedCount = transactions.filter(t => t.source === 'table' && isToday(t.date) && (!branchId || t.branchId === branchId || t.branch === branchId)).length;
+
+    return { open: openCount, closed: closedCount, total: openCount + closedCount };
+}
+
 function getNextTableName(branchId) {
-    const maxNumber = getOpenTables(branchId)
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const isToday = (dStr) => {
+        if (!dStr) return false;
+        try {
+            return new Date(dStr).toISOString().slice(0, 10) === todayStr;
+        } catch (e) {
+            return false;
+        }
+    };
+
+    const openNums = openTables
+        .filter(table => table.status === 'open' && (!branchId || table.branchId === branchId))
         .map(table => {
             const match = String(table.name || '').match(/Mesa\s+(\d+)/i);
             return match ? Number(match[1]) : 0;
-        })
-        .reduce((max, value) => Math.max(max, value), 0);
+        });
 
+    const closedNums = transactions
+        .filter(t => t.source === 'table' && isToday(t.date) && (!branchId || t.branchId === branchId || t.branch === branchId))
+        .map(t => {
+            const match = String(t.tableName || t.desc || '').match(/Mesa\s+(\d+)/i);
+            return match ? Number(match[1]) : 0;
+        });
+
+    const maxNumber = Math.max(0, ...openNums, ...closedNums);
     return `Mesa ${maxNumber + 1}`;
 }
 
@@ -2408,9 +2698,15 @@ function openTableEditor(tableId) {
 }
 
 function renderTablesView() {
-    if (!tablesGrid) return;
-
     const branchId = tablesBranchFilter?.value || '';
+
+    const summaryBadge = document.getElementById('tables-today-summary-badge');
+    if (summaryBadge) {
+        const counts = getTodayTablesCount(branchId);
+        summaryBadge.innerHTML = `<i class="ph ph-table"></i> Mesas hoy: ${counts.total} (${counts.open} abiertas, ${counts.closed} cobradas)`;
+    }
+
+    if (!tablesGrid) return;
     const filteredTables = getOpenTables(branchId);
 
     if (filteredTables.length === 0) {
@@ -2458,7 +2754,8 @@ async function closeTable(tableId, date = new Date()) {
         items: table.items,
         total: table.total,
         source: 'table',
-        date
+        date,
+        tableName: table.name || ''
     });
 
     await saveTransactionRecord(transaction, `${table.name} cobrada con éxito`);
@@ -2793,6 +3090,8 @@ function getFilteredData() {
             if (!t.date) return false;
             const tDate = new Date(t.date);
             if (isNaN(tDate.getTime())) return false;
+
+            if (mainTypeFilter !== 'all' && t.type !== mainTypeFilter) return false;
 
             if (currentFilter === 'all') return true;
 

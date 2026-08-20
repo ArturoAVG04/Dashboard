@@ -87,17 +87,24 @@
                     <h1 id="page-title">Dashboard</h1>
                     <p class="subtitle" id="current-date-display">Resumen de tu negocio</p>
                 </div>
-                <div class="time-filters">
-                    <button class="filter-btn active" data-filter="day">Hoy</button>
-                    <button class="filter-btn" data-filter="week">Semana</button>
-                    <button class="filter-btn" data-filter="month">Mes</button>
-                    <button class="filter-btn" data-filter="year">Año</button>
-                    <button class="filter-btn" data-filter="all">Todos</button>
-                    <div class="custom-date-filter">
-                        <button type="button" id="custom-date-trigger" class="custom-date-trigger" aria-label="Seleccionar fechas personalizadas" title="Fechas personalizadas">
-                            <i class="ph ph-calendar-blank"></i>
-                        </button>
-                        <input type="text" id="flatpickr-range" class="custom-date-input-hidden" readonly tabindex="-1" aria-hidden="true">
+                <div class="header-controls">
+                    <div class="type-filters" id="main-type-filters">
+                        <button type="button" class="type-filter-btn active" data-type-filter="all"><i class="ph ph-squares-four"></i> Ventas y gastos</button>
+                        <button type="button" class="type-filter-btn sales" data-type-filter="income"><i class="ph ph-arrow-up-right"></i> Ventas</button>
+                        <button type="button" class="type-filter-btn expenses" data-type-filter="expense"><i class="ph ph-arrow-down-right"></i> Gastos</button>
+                    </div>
+                    <div class="time-filters">
+                        <button class="filter-btn active" data-filter="day">Hoy</button>
+                        <button class="filter-btn" data-filter="week">Semana</button>
+                        <button class="filter-btn" data-filter="month">Mes</button>
+                        <button class="filter-btn" data-filter="year">Año</button>
+                        <button class="filter-btn" data-filter="all">Todos</button>
+                        <div class="custom-date-filter">
+                            <button type="button" id="custom-date-trigger" class="custom-date-trigger" aria-label="Seleccionar fechas personalizadas" title="Fechas personalizadas">
+                                <i class="ph ph-calendar-blank"></i>
+                            </button>
+                            <input type="text" id="flatpickr-range" class="custom-date-input-hidden" readonly tabindex="-1" aria-hidden="true">
+                        </div>
                     </div>
                 </div>
             </header>
@@ -280,6 +287,7 @@
                             <select id="tables-branch-filter" style="min-width: 220px;">
                                 <option value="">Todas las sucursales</option>
                             </select>
+                            <span id="tables-today-summary-badge" class="branch-indicator-badge"><i class="ph ph-table"></i> Mesas hoy: 0</span>
                             <button class="btn-text" id="btn-refresh-tables"><i class="ph ph-arrows-clockwise"></i> Actualizar</button>
                         </div>
                     </div>
@@ -315,9 +323,20 @@
             <!-- Products Management View -->
             <div id="view-products" class="view">
                 <section class="recent-transactions full-height">
-                    <div class="section-header">
-                        <h3>Gestión de Productos</h3>
-                        <button class="btn-text" id="btn-add-product-manage"><i class="ph ph-plus"></i> Nuevo Producto</button>
+                    <div class="section-header" style="gap:0.75rem; flex-wrap:wrap;">
+                        <div style="display:flex; flex-direction:column; gap:0.35rem;">
+                            <h3>Gestión de Productos</h3>
+                            <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                                <label for="products-branch-filter" style="font-size:0.85rem; color:var(--text-muted);"><i class="ph ph-storefront"></i> Sucursal:</label>
+                                <select id="products-branch-filter" style="font-size:0.85rem; padding:0.25rem 0.6rem; min-width:180px;">
+                                    <option value="">Todas las sucursales</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-left:auto;">
+                            <button class="btn-text" id="btn-sort-products-az" type="button" title="Restablecer orden alfabético"><i class="ph ph-sort-ascending"></i> Orden A-Z</button>
+                            <button class="btn-text" id="btn-add-product-manage"><i class="ph ph-plus"></i> Nuevo Producto</button>
+                        </div>
                     </div>
                     <div id="manage-new-product-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--primary);">
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
@@ -341,7 +360,10 @@
                 <section class="recent-transactions full-height">
                     <div class="section-header">
                         <h3>Categorías de Productos</h3>
-                        <button class="btn-text" id="btn-add-category-manage"><i class="ph ph-plus"></i> Nueva Categoría</button>
+                        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+                            <button class="btn-text" id="btn-sort-categories-az" type="button" title="Restablecer orden alfabético"><i class="ph ph-sort-ascending"></i> Orden A-Z</button>
+                            <button class="btn-text" id="btn-add-category-manage"><i class="ph ph-plus"></i> Nueva Categoría</button>
+                        </div>
                     </div>
                     <div id="manage-new-category-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--warning);">
                         <div style="display: grid; grid-template-columns: 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
