@@ -1,1276 +1,141 @@
-import { db } from './firebase-config.js';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocs, writeBatch, updateDoc, where, setDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
-import { INITIAL_ZONES, INITIAL_PRODUCTS, INITIAL_EXPENSE_TAGS, INITIAL_CATEGORIES } from './constants.js';
-import { STORAGE_KEYS, loadLocalState, saveLocalState } from './storage.js';
-import { authenticate, isAuthenticated } from './auth.js';
-import { groupProductsByCategory, upsertProduct, moveProductInList, removeProductById } from './product-utils.js';
+// js/app.js - Modern Clean Orchestrator for Dashboard App
+import { db } from './config/firebase-config.js';
+import { STORAGE_KEYS, loadLocalState, saveLocalState } from './config/storage.js';
+import { authenticate, isAuthenticated } from './core/auth.js';
+import { getLocalDateInputValue, createLocalDateFromInput, isSameLocalDate } from './core/date-utils.js';
+import { showToast, scrollToTop } from './core/ui-feedback.js';
+
+// Services
+import {
+    getCustomBranches,
+    subscribeBranches,
+    getBranchById
+} from './services/branches-service.js';
+import {
+    getCustomProducts,
+    getCustomCategories,
+    getCustomExpenseTags,
+    subscribeProducts,
+    subscribeCategories,
+    subscribeExpenseTags
+} from './services/products-service.js';
+import {
+    getOpenTables,
+    subscribeOpenTables,
+    deleteTable
+} from './services/tables-service.js';
+import {
+    getTransactions,
+    fetchTransactions,
+    deleteTransactionRecord,
+    syncStrandedOfflineTransactions
+} from './services/transactions-service.js';
+
+// UI Controllers
+import {
+    initCharts,
+    updateCharts
+} from './ui/charts-ui.js';
+import {
+    downloadCSV,
+    downloadImageSummary
+} from './ui/backup-ui.js';
+import {
+    updateDashboardSummaryCards,
+    renderRecentTransactions,
+    renderBranchSalesSummary,
+    renderProductsPeriodSummary,
+    getTopSellerStats
+} from './ui/dashboard-ui.js';
+import {
+    renderTablesView,
+    renderTablesBranchFilter
+} from './ui/tables-ui.js';
+import {
+    renderFullHistory,
+    toggleTopSellersSection,
+    toggleTopExpensesSection,
+    toggleHistoryTransactionsSection
+} from './ui/history-ui.js';
+import {
+    renderCategoryOptions,
+    renderManageProducts,
+    renderManageCategories,
+    renderManageBranches,
+    renderManageExpenseTags,
+    renderManageProductBranchOptions,
+    renderExpenseTags,
+    openExpenseModal,
+    closeModal,
+    handleExpenseFormSubmit,
+    saveManagedProduct,
+    saveManagedCategory,
+    saveManagedBranch,
+    saveManagedExpenseTag,
+    startEditingProduct,
+    startEditingCategory,
+    startEditingBranch,
+    startEditingExpenseTag,
+    deleteManagedProduct,
+    deleteManagedCategory,
+    deleteManagedBranch,
+    deleteManagedExpenseTag,
+    moveManagedProduct,
+    reorderCategories,
+    sortProductsAlphabetically,
+    sortCategoriesAlphabetically,
+    resetManageProductForm,
+    resetManageCategoryForm,
+    resetManageBranchForm,
+    resetManageExpenseForm,
+    createModifierOptionRowHtml,
+    createModifierGroupCardHtml
+} from './ui/products-ui.js';
+import {
+    startNewSale,
+    closeSaleModal,
+    openSaleEditor,
+    openTableEditor,
+    renderSaleBranchOptions,
+    renderSaleProducts,
+    renderSaleSummary,
+    setSaleMobilePanel,
+    handleSaleBranchChange,
+    handleSaleTotalInput,
+    handleSalePrimaryAction,
+    handleCloseActiveTable,
+    openModifiersModal,
+    closeModifiersModal,
+    updateModifiersModalTotal,
+    confirmAddProductWithModifiers,
+    addItemToCurrentSale,
+    updateCurrentSaleItemQty,
+    removeItemFromCurrentSale
+} from './ui/pos-ui.js';
 
 // State
-let transactions = loadLocalState(STORAGE_KEYS.transactions, []);
-let currentFilter = 'day'; // Match UI default
-let charts = { main: null, category: null };
-let customProducts = normalizeProducts(loadLocalState(STORAGE_KEYS.products, INITIAL_PRODUCTS));
-let customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS)));
-let customBranches = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.branches, INITIAL_ZONES), 'branch'));
-let customCategories = normalizeNamedList(loadLocalState(STORAGE_KEYS.categories, INITIAL_CATEGORIES), 'cat').sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
-let openTables = normalizeOpenTables(loadLocalState(STORAGE_KEYS.openTables, []));
-let branchColorMap = loadLocalState(STORAGE_KEYS.branchColors, {});
-
+let currentFilter = 'day';
 let customStartDate = null;
 let customEndDate = null;
-let customDateLabel = "";
-let editingProductId = null;
-let editingExpenseTagId = null;
-let editingBranchId = null;
-let editingCategoryId = null;
-let editingTransactionId = null;
-let isSyncingProducts = false;
-let isSyncingExpenseTags = false;
-let isSyncingBranches = false;
-let isSyncingCategories = false;
-let isSyncingTables = false;
-let saleDraft = createEmptySaleDraft();
-let activeSaleContext = { mode: 'sale', tableId: null };
-let recentTransactionsVisible = false;
-let historyTransactionsVisible = false;
-let topSellersVisible = false;
-let topExpensesVisible = false;
-let historyTypeFilter = 'all';
+let customDateLabel = '';
 let mainTypeFilter = 'all';
+let historyTypeFilter = 'all';
 let historySearchTerm = '';
-let selectedExpenseShortcuts = [];
-let customDatePicker = null;
 
-const BRANCH_COLOR_PALETTE = [
-    '#10b981', '#0ea5e9', '#f59e0b', '#f97316', '#8b5cf6', '#14b8a6',
-    '#ef4444', '#ec4899', '#84cc16', '#06b6d4', '#a855f7', '#eab308',
-    '#22c55e', '#3b82f6', '#f43f5e', '#64748b'
-];
+let views = {};
+let navBtns = {};
 
-// DOM Elements
-const views = {
-    dashboard: document.getElementById('view-dashboard'),
-    tables: document.getElementById('view-tables'),
-    transactions: document.getElementById('view-transactions'),
-    products: document.getElementById('view-products'),
-    backup: document.getElementById('view-backup')
-};
+// View Management
+export function switchView(viewName) {
+    Object.values(views).forEach(v => v?.classList.remove('active-view'));
+    Object.values(navBtns).forEach(btn => btn?.classList.remove('active'));
 
-const navBtns = {
-    dashboard: document.getElementById('nav-dashboard'),
-    tables: document.getElementById('nav-tables'),
-    transactions: document.getElementById('nav-transactions'),
-    products: document.getElementById('nav-products'),
-    backup: document.getElementById('nav-backup')
-};
-
-const modal = document.getElementById('transaction-modal');
-const form = document.getElementById('transaction-form');
-const btnNewSale = document.getElementById('btn-new-sale');
-const btnNewExpense = document.getElementById('btn-new-expense');
-const btnCloseModal = document.getElementById('close-modal');
-const btnViewAll = document.getElementById('btn-view-all');
-
-const summaryIncome = document.getElementById('summary-income');
-const summaryExpense = document.getElementById('summary-expense');
-const summaryProfit = document.getElementById('summary-profit');
-
-// Login Elements
-const loginScreen = document.getElementById('login-screen');
-const mainApp = document.getElementById('main-app');
-const loginForm = document.getElementById('login-form');
-const loginPassword = document.getElementById('login-password');
-const loginError = document.getElementById('login-error');
-const btnToggleLoginPassword = document.getElementById('toggle-login-password');
-const loginPasswordIcon = btnToggleLoginPassword?.querySelector('i') || null;
-
-const recentTbody = document.getElementById('recent-tbody');
-const historyTbody = document.getElementById('history-tbody');
-const topSellersTbody = document.getElementById('top-sellers-tbody');
-const topExpensesTbody = document.getElementById('top-expenses-tbody');
-const branchSalesList = document.getElementById('branch-sales-list');
-const dailyProductsTitle = document.getElementById('daily-products-title');
-const dailyProductsList = document.getElementById('daily-products-list');
-const recentTransactionsPanel = document.getElementById('recent-transactions-panel');
-const historyTransactionsPanel = document.getElementById('history-transactions-panel');
-const topSellersPanel = document.getElementById('top-sellers-panel');
-const topExpensesPanel = document.getElementById('top-expenses-panel');
-const btnToggleRecentTransactions = document.getElementById('btn-toggle-recent-transactions');
-const btnToggleHistoryTransactions = document.getElementById('btn-toggle-history-transactions');
-const btnToggleTopSellers = document.getElementById('btn-toggle-top-sellers');
-const btnToggleTopExpenses = document.getElementById('btn-toggle-top-expenses');
-const historyTypeFilterSelect = document.getElementById('history-type-filter');
-const historySearchInput = document.getElementById('history-search');
-
-// Form specific elements
-const typeSelectors = document.querySelectorAll('input[name="type"]');
-const extraSalesFields = document.getElementById('extra-sales-fields');
-const productsContainer = document.getElementById('products-container');
-const zoneSelect = document.getElementById('zone-select');
-const totalSalesAmount = document.getElementById('amount');
-
-const filterBtns = document.querySelectorAll('.filter-btn');
-const customDateTrigger = document.getElementById('custom-date-trigger');
-
-// Dynamic Form Elements
-const btnToggleAddProduct = document.getElementById('toggle-add-product');
-const btnToggleAddExpense = document.getElementById('toggle-add-expense');
-const newProductForm = document.getElementById('new-product-form');
-const newExpenseForm = document.getElementById('new-expense-form');
-const btnSaveNewProduct = document.getElementById('save-new-product');
-const btnSaveNewExpense = document.getElementById('save-new-expense');
-const expenseTagsContainer = document.getElementById('expense-tags-container');
-const selectedExpensesContainer = document.getElementById('selected-expenses-container');
-const manageForm = document.getElementById('manage-new-product-form');
-const manageNameInput = document.getElementById('manage-prod-name');
-const managePriceInput = document.getElementById('manage-prod-price');
-const manageCategoryInput = document.getElementById('manage-prod-cat');
-const modalProductCategoryInput = document.getElementById('new-prod-cat');
-const btnManageSaveProd = document.getElementById('manage-save-product');
-const manageProductsList = document.getElementById('manage-products-list');
-const manageProductBranches = document.getElementById('manage-product-branches');
-const manageExpenseForm = document.getElementById('manage-new-expense-form');
-const manageExpenseNameInput = document.getElementById('manage-exp-name');
-const btnAddExpenseManage = document.getElementById('btn-add-expense-manage');
-const btnManageSaveExpense = document.getElementById('manage-save-expense');
-const manageExpenseTagsList = document.getElementById('manage-expense-tags-list');
-const manageCategoryForm = document.getElementById('manage-new-category-form');
-const manageCategoryNameInput = document.getElementById('manage-category-name');
-const btnAddCategoryManage = document.getElementById('btn-add-category-manage');
-const btnManageSaveCategory = document.getElementById('manage-save-category');
-const manageCategoriesList = document.getElementById('manage-categories-list');
-const manageBranchForm = document.getElementById('manage-new-branch-form');
-const manageBranchNameInput = document.getElementById('manage-branch-name');
-const manageBranchUseTables = document.getElementById('manage-branch-use-tables');
-const btnAddBranchManage = document.getElementById('btn-add-branch-manage');
-const btnManageSaveBranch = document.getElementById('manage-save-branch');
-const manageBranchesList = document.getElementById('manage-branches-list');
-const modalTitle = document.getElementById('transaction-modal-title');
-const tablesGrid = document.getElementById('tables-grid');
-const tablesBranchFilter = document.getElementById('tables-branch-filter');
-const btnRefreshTables = document.getElementById('btn-refresh-tables');
-const saleModal = document.getElementById('sale-modal');
-const closeSaleModalBtn = document.getElementById('close-sale-modal');
-const saleModalTitle = document.getElementById('sale-modal-title');
-const saleModalSubtitle = document.getElementById('sale-modal-subtitle');
-const saleBranchSelect = document.getElementById('sale-branch-select');
-const saleDateInput = document.getElementById('sale-date-input');
-const saleProductsGrid = document.getElementById('sale-products-grid');
-const saleOrderItems = document.getElementById('sale-order-items');
-const saleItemsCount = document.getElementById('sale-items-count');
-const saleTotalInput = document.getElementById('sale-total-input');
-const saleTotalDisplay = document.getElementById('sale-total-display');
-const salePrimaryAction = document.getElementById('sale-primary-action');
-const saleCloseTableBtn = document.getElementById('sale-close-table-btn');
-const saleTableBanner = document.getElementById('sale-table-banner');
-const saleMobileSwitch = document.getElementById('sale-mobile-switch');
-const saleLayout = document.querySelector('.sale-layout');
-const mobileSaleSummary = document.getElementById('mobile-sale-summary');
-const manageModGroupsContainer = document.getElementById('manage-modifier-groups-container');
-const btnAddModGroup = document.getElementById('btn-add-modifier-group');
-const modifiersModal = document.getElementById('modifiers-modal');
-const closeModifiersModalBtn = document.getElementById('close-modifiers-modal');
-const modModalProdName = document.getElementById('mod-modal-prod-name');
-const modModalProdPrice = document.getElementById('mod-modal-prod-price');
-const modModalBody = document.getElementById('modifiers-modal-body');
-const modModalTotal = document.getElementById('mod-modal-total');
-const btnConfirmModifiers = document.getElementById('btn-confirm-modifiers');
-const modQtyMinusBtn = document.getElementById('mod-qty-minus');
-const modQtyPlusBtn = document.getElementById('mod-qty-plus');
-const modQtyVal = document.getElementById('mod-qty-val');
-
-let currentModProduct = null;
-let currentModQty = 1;
-
-function scrollToTop() {
-    window.scrollTo(0, 0);
-    document.documentElement.scrollTop = 0;
-    document.body.scrollTop = 0;
-    mainApp?.querySelector('.main-content')?.scrollTo?.(0, 0);
-    modal?.querySelector('.modal')?.scrollTo?.(0, 0);
-    saleModal?.querySelector('.sale-modal')?.scrollTo?.(0, 0);
-}
-
-function isStackedSaleLayout() {
-    return saleLayout && getComputedStyle(saleLayout).flexDirection === 'column';
-}
-
-function scrollSaleModalToTop(behavior = 'smooth') {
-    const container = saleModal?.querySelector('.sale-modal');
-    if (!container) return;
-    container.scrollTo({ top: 0, behavior });
-}
-
-function createEmptySaleDraft(overrides = {}) {
-    return {
-        branchId: '',
-        items: [],
-        total: 0,
-        ...overrides
-    };
-}
-
-function getLocalDateInputValue(date = new Date()) {
-    const tzOffset = date.getTimezoneOffset() * 60000;
-    return new Date(date.getTime() - tzOffset).toISOString().slice(0, 10);
-}
-
-function isSameLocalDate(dateA, dateB = new Date()) {
-    if (!dateA) return false;
-    try {
-        const dA = typeof dateA === 'string' || typeof dateA === 'number' ? new Date(dateA) : dateA;
-        const dB = typeof dateB === 'string' || typeof dateB === 'number' ? new Date(dateB) : dateB;
-        if (isNaN(dA.getTime()) || isNaN(dB.getTime())) return false;
-        return getLocalDateInputValue(dA) === getLocalDateInputValue(dB);
-    } catch (e) {
-        return false;
-    }
-}
-
-function escapeHtml(str) {
-    if (!str) return '';
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
-}
-
-function createLocalDateFromInput(dateValue) {
-    const nowLocal = new Date();
-    if (!dateValue) return nowLocal;
-
-    const [yy, mm, dd] = dateValue.split('-').map(Number);
-    if (!yy || !mm || !dd) return nowLocal;
-
-    nowLocal.setFullYear(yy, mm - 1, dd);
-    return nowLocal;
-}
-
-function normalizeProduct(product, index = 0) {
-    return {
-        ...product,
-        id: product.id || `p_${index}_${Date.now()}`,
-        price: Number(product.price) || 0,
-        category: product.category || 'General',
-        availableInBranches: Array.isArray(product.availableInBranches)
-            ? product.availableInBranches.filter(Boolean)
-            : [],
-        modifiers: Array.isArray(product.modifiers)
-            ? product.modifiers.map((group, gIdx) => ({
-                id: group.id || `mod_${Date.now()}_${gIdx}`,
-                name: String(group.name || '').trim(),
-                type: group.type === 'multiple' ? 'multiple' : 'single',
-                options: Array.isArray(group.options)
-                    ? group.options.map((opt, oIdx) => ({
-                        id: opt.id || `opt_${Date.now()}_${oIdx}`,
-                        name: String(typeof opt === 'string' ? opt : (opt.name || '')).trim(),
-                        price: Number(opt.price) || 0
-                    })).filter(opt => opt.name !== '')
-                    : []
-            })).filter(group => group.name !== '' && group.options.length > 0)
-            : []
-    };
-}
-
-function normalizeProducts(products) {
-    return (products || []).map((product, index) => normalizeProduct(product, index));
-}
-
-function normalizeTable(table, index = 0) {
-    const items = Array.isArray(table.items)
-        ? table.items.map((item, itemIdx) => ({
-            id: item.id || `item_${item.productId || 'p'}_${Date.now()}_${itemIdx}`,
-            productId: item.productId || '',
-            name: item.name || 'Producto',
-            basePrice: typeof item.basePrice === 'number' ? item.basePrice : (Number(item.price) || 0),
-            price: Number(item.price) || 0,
-            qty: Number(item.qty) || 0,
-            selectedModifiers: Array.isArray(item.selectedModifiers)
-                ? item.selectedModifiers
-                : (Array.isArray(item.modifiers) ? item.modifiers : []),
-            modifierText: item.modifierText || '',
-            modSignature: item.modSignature || ''
-        })).filter(item => item.qty > 0)
-        : [];
-
-    return {
-        id: table.id || `table_${Date.now()}_${index}`,
-        branchId: table.branchId || '',
-        name: table.name || `Mesa ${index + 1}`,
-        items,
-        total: typeof table.total === 'number' ? table.total : getItemsTotal(items),
-        status: table.status || 'open',
-        createdAt: table.createdAt || new Date().toISOString()
-    };
-}
-
-function normalizeOpenTables(tables) {
-    return (tables || []).map((table, index) => normalizeTable(table, index))
-        .filter(table => table.status === 'open');
-}
-
-function getItemsTotal(items) {
-    return items.reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.qty) || 0)), 0);
-}
-
-function getBranchById(branchId) {
-    return customBranches.find(branch => branch.id === branchId) || null;
-}
-
-function getBranchNameById(branchId) {
-    return getBranchById(branchId)?.name || '';
-}
-
-function productAvailableInBranch(product, branchId) {
-    if (!product || !branchId) return true;
-    if (!Array.isArray(product.availableInBranches) || product.availableInBranches.length === 0) {
-        return true;
-    }
-
-    const branch = getBranchById(branchId);
-    const branchName = branch ? branch.name : '';
-
-    return product.availableInBranches.some(b => {
-        if (!b) return false;
-        return b === branchId || (branchName && b === branchName) || (branch && b === branch.id);
-    });
-}
-
-function getBranchColorKey(branch) {
-    return branch?.id || `branch:${normalizeText(branch?.name || '')}`;
-}
-
-function createGeneratedBranchColor(index) {
-    const hue = (index * 47) % 360;
-    return `hsl(${hue}, 72%, 52%)`;
-}
-
-function getStableBranchColor(branch) {
-    const key = getBranchColorKey(branch);
-    if (!key) return '#334155';
-    if (branchColorMap[key]) return branchColorMap[key];
-
-    const usedColors = new Set(Object.values(branchColorMap));
-    const paletteColor = BRANCH_COLOR_PALETTE.find(color => !usedColors.has(color));
-    branchColorMap[key] = paletteColor || createGeneratedBranchColor(usedColors.size);
-    saveLocalState(STORAGE_KEYS.branchColors, branchColorMap);
-    return branchColorMap[key];
-}
-
-// Init App
-function init() {
-    if ('scrollRestoration' in history) {
-        history.scrollRestoration = 'manual';
-    }
-
-    try {
-        console.log("Iniciando aplicación...");
-        if (document.getElementById('flatpickr-range')) {
-            customDatePicker = flatpickr("#flatpickr-range", {
-                mode: "range",
-                locale: "es",
-                dateFormat: "d M Y",
-                positionElement: customDateTrigger || undefined,
-                onChange: function (selectedDates) {
-                    if (selectedDates.length === 2) {
-                        customStartDate = selectedDates[0];
-                        customEndDate = selectedDates[1];
-                        currentFilter = 'custom';
-                        document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => btn.classList.remove('active'));
-                        customDateTrigger?.classList.add('active');
-                        updateDashboard();
-                        if (views.transactions.classList.contains('active-view')) renderFullHistory();
-                    }
-                }
-            });
-        }
-    } catch (e) { console.warn("Error en flatpickr:", e); }
-
-    try { setupDateStr(); } catch (e) { console.error("Error en setupDateStr:", e); }
-    try { setupEventListeners(); } catch (e) { console.error("Error en setupEventListeners:", e); }
-    try { initCharts(); } catch (e) { console.error("Error en charts:", e); }
-    try { initFormZones(); } catch (e) { console.error("Error en zonas:", e); }
-    try { renderCategoryOptions(); } catch (e) { console.error("Error en categorias:", e); }
-    try { renderProductsList(); } catch (e) { console.error("Error en productos:", e); }
-    try { renderExpenseTags(); } catch (e) { console.error("Error en accesos de gasto:", e); }
-    try { renderManageCategories(); } catch (e) { console.error("Error en gestion de categorias:", e); }
-    try { renderManageBranches(); } catch (e) { console.error("Error en gestion de sucursales:", e); }
-    try { renderManageProducts(); } catch (e) { console.error("Error en gestion de productos:", e); }
-    try { renderManageExpenseTags(); } catch (e) { console.error("Error en gestion de gastos:", e); }
-    try { renderManageProductBranchOptions(); } catch (e) { console.error("Error en sucursales de producto:", e); }
-    try { renderTablesBranchFilter(); } catch (e) { console.error("Error en filtro de mesas:", e); }
-    try { renderTablesView(); } catch (e) { console.error("Error en vista de mesas:", e); }
-    try { renderSaleBranchOptions(); } catch (e) { console.error("Error en sucursales de venta:", e); }
-    try { setSaleMobilePanel('menu'); } catch (e) { console.error("Error en panel movil de venta:", e); }
-
-    if (isAuthenticated()) {
-        unlockApp();
-    } else {
-        loginScreen.style.display = 'flex';
-        mainApp.style.display = 'none';
-        loginPassword?.focus();
-    }
-
-    scrollToTop();
-}
-
-function unlockApp() {
-    if (loginScreen) loginScreen.style.display = 'none';
-    if (mainApp) mainApp.style.display = 'flex';
-    scrollToTop();
-
-    try {
-        updateDashboard();
-        if (views.transactions && views.transactions.classList.contains('active-view')) {
-            renderFullHistory();
-        }
-    } catch (e) { console.error("Error actualizando dashboard:", e); }
-
-    try { syncStrandedOfflineTransactions(); } catch (e) { console.warn("Error syncStrandedOfflineTransactions:", e); }
-    try { fetchTransactions(); } catch (e) { console.warn("Error fetchTransactions:", e); }
-    try { subscribeProducts(); } catch (e) { console.warn("Error subscribeProducts:", e); }
-    try { subscribeExpenseTags(); } catch (e) { console.warn("Error subscribeExpenseTags:", e); }
-    try { subscribeBranches(); } catch (e) { console.warn("Error subscribeBranches:", e); }
-    try { subscribeCategories(); } catch (e) { console.warn("Error subscribeCategories:", e); }
-    try { subscribeOpenTables(); } catch (e) { console.warn("Error subscribeOpenTables:", e); }
-}
-
-async function syncProductsToCloud() {
-    if (!db || isSyncingProducts) return;
-
-    isSyncingProducts = true;
-    try {
-        const collectionRef = collection(db, "dashboard_products");
-        const existingSnapshot = await getDocs(collectionRef);
-        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
-        const nextIds = new Set(customProducts.map(item => item.id));
-        const batch = writeBatch(db);
-
-        customProducts.forEach((product, index) => {
-            const ref = doc(db, "dashboard_products", product.id);
-            batch.set(ref, {
-                name: product.name,
-                price: product.price,
-                category: product.category,
-                availableInBranches: Array.isArray(product.availableInBranches) ? product.availableInBranches : [],
-                modifiers: Array.isArray(product.modifiers) ? product.modifiers : [],
-                order: index
-            });
-        });
-
-        existingIds.forEach(id => {
-            if (!nextIds.has(id)) {
-                batch.delete(doc(db, "dashboard_products", id));
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar los productos:", error);
-    } finally {
-        isSyncingProducts = false;
-    }
-}
-
-async function syncExpenseTagsToCloud() {
-    if (!db || isSyncingExpenseTags) return;
-
-    isSyncingExpenseTags = true;
-    try {
-        const collectionRef = collection(db, "dashboard_expense_tags");
-        const existingSnapshot = await getDocs(collectionRef);
-        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
-        const nextIds = new Set(customExpenseTags.map(item => item.id));
-        const batch = writeBatch(db);
-
-        customExpenseTags.forEach((tag, index) => {
-            const ref = doc(db, "dashboard_expense_tags", tag.id);
-            batch.set(ref, {
-                name: tag.name,
-                order: index
-            });
-        });
-
-        existingIds.forEach(id => {
-            if (!nextIds.has(id)) {
-                batch.delete(doc(db, "dashboard_expense_tags", id));
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar los accesos de gasto:", error);
-    } finally {
-        isSyncingExpenseTags = false;
-    }
-}
-
-async function syncBranchesToCloud() {
-    if (!db || isSyncingBranches) return;
-
-    isSyncingBranches = true;
-    try {
-        const collectionRef = collection(db, "dashboard_branches");
-        const existingSnapshot = await getDocs(collectionRef);
-        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
-        const nextIds = new Set(customBranches.map(item => item.id));
-        const batch = writeBatch(db);
-
-        customBranches.forEach((branch, index) => {
-            const ref = doc(db, "dashboard_branches", branch.id);
-            batch.set(ref, { name: branch.name, useTables: Boolean(branch.useTables), order: index });
-        });
-
-        existingIds.forEach(id => {
-            if (!nextIds.has(id)) {
-                batch.delete(doc(db, "dashboard_branches", id));
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar las sucursales:", error);
-    } finally {
-        isSyncingBranches = false;
-    }
-}
-
-async function syncOpenTablesToCloud() {
-    if (!db || isSyncingTables) return;
-
-    isSyncingTables = true;
-    try {
-        const collectionRef = collection(db, "dashboard_tables");
-        const existingSnapshot = await getDocs(collectionRef);
-        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
-        const nextIds = new Set(openTables.map(item => item.id));
-        const batch = writeBatch(db);
-
-        openTables.forEach((table) => {
-            batch.set(doc(db, "dashboard_tables", table.id), normalizeTable(table));
-        });
-
-        existingIds.forEach(id => {
-            if (!nextIds.has(id)) {
-                batch.delete(doc(db, "dashboard_tables", id));
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar las mesas:", error);
-    } finally {
-        isSyncingTables = false;
-    }
-}
-
-async function syncCategoriesToCloud() {
-    if (!db || isSyncingCategories) return;
-
-    isSyncingCategories = true;
-    try {
-        const collectionRef = collection(db, "dashboard_categories");
-        const existingSnapshot = await getDocs(collectionRef);
-        const existingIds = new Set(existingSnapshot.docs.map(item => item.id));
-        const nextIds = new Set(customCategories.map(item => item.id));
-        const batch = writeBatch(db);
-
-        customCategories.forEach((category, index) => {
-            const ref = doc(db, "dashboard_categories", category.id);
-            batch.set(ref, { name: category.name, order: index });
-        });
-
-        existingIds.forEach(id => {
-            if (!nextIds.has(id)) {
-                batch.delete(doc(db, "dashboard_categories", id));
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar las categorías:", error);
-    } finally {
-        isSyncingCategories = false;
-    }
-}
-
-function subscribeProducts() {
-    if (!db) return;
-
-    const productsQuery = query(collection(db, "dashboard_products"), orderBy("order", "asc"));
-    onSnapshot(productsQuery, async (snapshot) => {
-        if (snapshot.empty) {
-            await syncProductsToCloud();
-            return;
-        }
-
-        customProducts = snapshot.docs.map(item => ({
-            ...item.data(),
-            id: item.id
-        })).map((product, index) => normalizeProduct(product, index));
-        saveLocalState(STORAGE_KEYS.products, customProducts);
-        renderProductsList();
-        renderManageProducts();
-        renderSaleProducts();
-    }, (error) => {
-        console.warn("No se pudieron leer los productos desde Firebase:", error);
-    });
-}
-
-function subscribeExpenseTags() {
-    if (!db) return;
-
-    const tagsQuery = query(collection(db, "dashboard_expense_tags"), orderBy("order", "asc"));
-    onSnapshot(tagsQuery, async (snapshot) => {
-        if (snapshot.empty) {
-            await syncExpenseTagsToCloud();
-            return;
-        }
-
-        customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(snapshot.docs.map(item => ({
-            ...item.data(),
-            id: item.id
-        }))));
-        saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
-        renderExpenseTags();
-        renderManageExpenseTags();
-    }, (error) => {
-        console.warn("No se pudieron leer los accesos de gasto desde Firebase:", error);
-    });
-}
-
-function subscribeBranches() {
-    if (!db) return;
-
-    const branchesQuery = query(collection(db, "dashboard_branches"), orderBy("order", "asc"));
-    onSnapshot(branchesQuery, async (snapshot) => {
-        if (snapshot.empty) {
-            await syncBranchesToCloud();
-            return;
-        }
-
-        customBranches = sortNamedListAlphabetically(normalizeNamedList(snapshot.docs.map(item => ({
-            ...item.data(),
-            id: item.id
-        })), 'branch'));
-        saveLocalState(STORAGE_KEYS.branches, customBranches);
-        initFormZones();
-        renderManageBranches();
-        renderManageProductBranchOptions();
-        renderTablesBranchFilter();
-        renderSaleBranchOptions();
-        renderSaleProducts();
-        renderTablesView();
-        updateDashboard();
-    }, (error) => {
-        console.warn("No se pudieron leer las sucursales desde Firebase:", error);
-    });
-}
-
-function subscribeCategories() {
-    if (!db) return;
-
-    const categoriesQuery = query(collection(db, "dashboard_categories"), orderBy("order", "asc"));
-    onSnapshot(categoriesQuery, async (snapshot) => {
-        if (snapshot.empty) {
-            await syncCategoriesToCloud();
-            return;
-        }
-
-        const normalizedCats = normalizeNamedList(snapshot.docs.map(item => ({
-            ...item.data(),
-            id: item.id
-        })), 'cat');
-        customCategories = [...normalizedCats].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
-        saveLocalState(STORAGE_KEYS.categories, customCategories);
-        renderCategoryOptions();
-        renderProductsList();
-        renderManageCategories();
-        renderManageProducts();
-    }, (error) => {
-        console.warn("No se pudieron leer las categorías desde Firebase:", error);
-    });
-}
-
-function subscribeOpenTables() {
-    if (!db) return;
-
-    const tablesQuery = query(collection(db, "dashboard_tables"), orderBy("createdAt", "asc"));
-    onSnapshot(tablesQuery, (snapshot) => {
-        if (snapshot.empty) {
-            openTables = [];
-            saveLocalState(STORAGE_KEYS.openTables, openTables);
-            renderTablesView();
-            return;
-        }
-
-        openTables = normalizeOpenTables(snapshot.docs.map(item => ({
-            ...item.data(),
-            id: item.id
-        })));
-        saveLocalState(STORAGE_KEYS.openTables, openTables);
-        renderTablesView();
-    }, (error) => {
-        console.warn("No se pudieron leer las mesas desde Firebase:", error);
-    });
-}
-
-// Format Currency
-const formatMoney = (amount) => {
-    return new Intl.NumberFormat('es-MX', {
-        style: 'currency',
-        currency: 'MXN'
-    }).format(amount || 0);
-};
-
-function normalizeExpenseTags(tags) {
-    return (tags || []).map((tag, index) => {
-        if (typeof tag === 'string') {
-            return { id: `exp_${index}_${tag.toLowerCase().replace(/\s+/g, '_')}`, name: tag, order: index };
-        }
-
-        return {
-            id: tag.id || `exp_${index}_${(tag.name || '').toLowerCase().replace(/\s+/g, '_')}`,
-            name: tag.name || '',
-            order: typeof tag.order === 'number' ? tag.order : index
-        };
-    }).filter(tag => tag.name);
-}
-
-function normalizeNamedList(items, prefix) {
-    return (items || []).map((item, index) => {
-        if (typeof item === 'string') {
-            return {
-                id: `${prefix}_${index}_${item.toLowerCase().replace(/\s+/g, '_')}`,
-                name: item,
-                order: index,
-                ...(prefix === 'branch' ? { useTables: false } : {})
-            };
-        }
-
-        const normalizedItem = {
-            id: item.id || `${prefix}_${index}_${(item.name || '').toLowerCase().replace(/\s+/g, '_')}`,
-            name: item.name || '',
-            order: typeof item.order === 'number' ? item.order : index
-        };
-
-        if (prefix === 'branch') {
-            normalizedItem.useTables = Boolean(item.useTables);
-        }
-
-        return normalizedItem;
-    }).filter(item => item.name);
-}
-
-function sortNamedListAlphabetically(items) {
-    return [...items]
-        .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }))
-        .map((item, index) => ({ ...item, order: index }));
-}
-
-function hasDuplicateName(items, name, ignoreId = null) {
-    const normalizedName = normalizeText(name);
-    return items.some(item => item.id !== ignoreId && normalizeText(item.name) === normalizedName);
-}
-
-// UI Feedback
-function showToast(message) {
-    const toast = document.createElement('div');
-    toast.className = 'toast-notification';
-    toast.innerHTML = `<i class="ph-fill ph-check-circle"></i> ${message}`;
-    document.body.appendChild(toast);
-
-    setTimeout(() => {
-        toast.style.opacity = '1';
-        toast.style.transform = 'translateY(0)';
-    }, 10);
-
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateY(20px)';
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
-
-// Setup Listeners
-function setupEventListeners() {
-    // Login
-    if (loginForm) {
-        loginForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            loginError.style.display = 'none';
-            const pw = loginPassword.value.trim();
-
-            if (await authenticate(pw)) {
-                loginError.style.display = 'none';
-                loginPassword.value = '';
-                loginPassword.type = 'password';
-                btnToggleLoginPassword?.setAttribute('aria-pressed', 'false');
-                btnToggleLoginPassword?.setAttribute('aria-label', 'Mostrar contrasena');
-                if (loginPasswordIcon) {
-                    loginPasswordIcon.classList.remove('ph-eye-slash');
-                    loginPasswordIcon.classList.add('ph-eye');
-                }
-                unlockApp();
-            } else {
-                loginError.style.display = 'block';
-                loginPassword.focus();
-                loginPassword.select();
-            }
-        });
-    }
-
-    if (btnToggleLoginPassword) {
-        btnToggleLoginPassword.addEventListener('click', () => {
-            const isHidden = loginPassword.type === 'password';
-            loginPassword.type = isHidden ? 'text' : 'password';
-            btnToggleLoginPassword.setAttribute('aria-label', isHidden ? 'Ocultar contrasena' : 'Mostrar contrasena');
-            btnToggleLoginPassword.setAttribute('aria-pressed', isHidden ? 'true' : 'false');
-
-            if (loginPasswordIcon) {
-                loginPasswordIcon.classList.remove('ph-eye', 'ph-eye-slash');
-                loginPasswordIcon.classList.add(isHidden ? 'ph-eye-slash' : 'ph-eye');
-            }
-        });
-    }
-
-    // Navigation
-    navBtns.dashboard?.addEventListener('click', () => switchView('dashboard'));
-    navBtns.tables?.addEventListener('click', () => switchView('tables'));
-    navBtns.transactions?.addEventListener('click', () => switchView('transactions'));
-    navBtns.products?.addEventListener('click', () => switchView('products'));
-    navBtns.backup?.addEventListener('click', () => switchView('backup'));
-    btnViewAll?.addEventListener('click', () => switchView('transactions'));
-    customDateTrigger?.addEventListener('click', () => {
-        customDatePicker?.open();
-    });
-    btnToggleRecentTransactions?.addEventListener('click', () => {
-        recentTransactionsVisible = !recentTransactionsVisible;
-        updateDashboard();
-    });
-    btnToggleHistoryTransactions?.addEventListener('click', () => {
-        historyTransactionsVisible = !historyTransactionsVisible;
-        renderFullHistory();
-    });
-    btnToggleTopSellers?.addEventListener('click', () => {
-        topSellersVisible = !topSellersVisible;
-        renderFullHistory();
-    });
-    btnToggleTopExpenses?.addEventListener('click', () => {
-        topExpensesVisible = !topExpensesVisible;
-        renderFullHistory();
-    });
-    historyTypeFilterSelect?.addEventListener('change', () => {
-        historyTypeFilter = historyTypeFilterSelect.value || 'all';
-        if (!historyTransactionsVisible) historyTransactionsVisible = true;
-        renderFullHistory();
-    });
-    historySearchInput?.addEventListener('input', () => {
-        historySearchTerm = historySearchInput.value || '';
-        if (!historyTransactionsVisible) historyTransactionsVisible = true;
-        renderFullHistory();
-    });
-
-    // Main Type Filter (Ambas, Solo Ventas, Solo Gastos)
-    const mainTypeFilters = document.getElementById('main-type-filters');
-    if (mainTypeFilters) {
-        mainTypeFilters.addEventListener('click', (event) => {
-            const btn = event.target.closest('[data-type-filter]');
-            if (!btn) return;
-            mainTypeFilter = btn.dataset.typeFilter || 'all';
-            mainTypeFilters.querySelectorAll('.type-filter-btn').forEach(b => {
-                b.classList.toggle('active', b.dataset.typeFilter === mainTypeFilter);
-            });
-            updateDashboard();
-            if (views.transactions.classList.contains('active-view')) {
-                renderFullHistory();
-            }
-        });
-    }
-
-    // Sort A-Z Buttons for Products and Categories
-    document.getElementById('btn-sort-products-az')?.addEventListener('click', sortProductsAlphabetically);
-    document.getElementById('btn-sort-categories-az')?.addEventListener('click', sortCategoriesAlphabetically);
-    document.getElementById('products-branch-filter')?.addEventListener('change', renderManageProducts);
-
-    // Exports
-    document.getElementById('btn-export-image')?.addEventListener('click', downloadImageSummary);
-    document.getElementById('btn-export-csv')?.addEventListener('click', downloadCSV);
-
-    // Modal
-    btnNewSale?.addEventListener('click', () => startNewSale());
-    btnNewExpense?.addEventListener('click', () => openExpenseModal());
-    btnCloseModal?.addEventListener('click', () => closeModal());
-    closeSaleModalBtn?.addEventListener('click', () => closeSaleModal());
-    saleBranchSelect?.addEventListener('change', handleSaleBranchChange);
-    saleTotalInput?.addEventListener('input', handleSaleTotalInput);
-    salePrimaryAction?.addEventListener('click', handleSalePrimaryAction);
-    saleCloseTableBtn?.addEventListener('click', handleCloseActiveTable);
-
-    if (saleMobileSwitch) {
-        saleMobileSwitch.addEventListener('click', (event) => {
-            const button = event.target.closest('[data-sale-panel]');
-            if (!button) return;
-            setSaleMobilePanel(button.dataset.salePanel);
-        });
-    }
-
-    if (tablesBranchFilter) {
-        tablesBranchFilter.addEventListener('change', () => {
-            renderTablesView();
-            if (tablesBranchFilter.value) {
-                saveLocalState(STORAGE_KEYS.lastBranch, tablesBranchFilter.value);
-                renderManageProducts();
-            }
-        });
-    }
-
-    if (btnRefreshTables) {
-        btnRefreshTables.addEventListener('click', renderTablesView);
-    }
-
-    if (mobileSaleSummary) {
-        mobileSaleSummary.addEventListener('click', (e) => {
-            if (e.target.closest('.mobile-summary-btn')) {
-                setSaleMobilePanel('order');
-            }
-        });
-    }
-
-    if (form) {
-        form.addEventListener('submit', handleFormSubmit);
-    }
-
-    // Filters
-    filterBtns.forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const tgt = e.target.closest('.filter-btn');
-            if (!tgt || !tgt.dataset.filter) return;
-            filterBtns.forEach(b => {
-                if (b.dataset.filter) b.classList.remove('active');
-            });
-            customDateTrigger?.classList.remove('active');
-            tgt.classList.add('active');
-            currentFilter = tgt.dataset.filter;
-            updateDashboard();
-        });
-    });
-
-    // Dynamic Expense Form UI Toggles
-    if (btnToggleAddExpense && newExpenseForm) {
-        btnToggleAddExpense.addEventListener('click', () => {
-            newExpenseForm.style.display = newExpenseForm.style.display === 'none' ? 'block' : 'none';
-        });
-    }
-
-    // Save Custom Expense Tag
-    btnSaveNewExpense.addEventListener('click', () => {
-        const name = document.getElementById('new-exp-name').value.trim();
-        if (name) {
-            if (hasDuplicateName(customExpenseTags, name)) {
-                showToast("Ese atajo ya está registrado");
-                return;
-            }
-            customExpenseTags = upsertExpenseTag(customExpenseTags, { name });
-            saveExpenseTagsState();
-
-            document.getElementById('new-exp-name').value = '';
-            newExpenseForm.style.display = 'none';
-            showToast("Atajo agregado");
-        }
-    });
-
-    // Manage Products view specific events
-    const btnAddProductManage = document.getElementById('btn-add-product-manage');
-    if (btnAddProductManage) {
-        btnAddProductManage.addEventListener('click', () => {
-            if (editingProductId) resetManageProductForm();
-            manageForm.style.display = manageForm.style.display === 'none' ? 'block' : 'none';
-        });
-    }
-
-    if (btnManageSaveProd) {
-        btnManageSaveProd.addEventListener('click', () => {
-            saveManagedProduct();
-        });
-    }
-
-    if (btnAddExpenseManage) {
-        btnAddExpenseManage.addEventListener('click', () => {
-            if (editingExpenseTagId) resetManageExpenseForm();
-            manageExpenseForm.style.display = manageExpenseForm.style.display === 'none' ? 'block' : 'none';
-        });
-    }
-
-    if (btnAddCategoryManage) {
-        btnAddCategoryManage.addEventListener('click', () => {
-            if (editingCategoryId) resetManageCategoryForm();
-            manageCategoryForm.style.display = manageCategoryForm.style.display === 'none' ? 'block' : 'none';
-        });
-    }
-
-    if (btnManageSaveCategory) {
-        btnManageSaveCategory.addEventListener('click', () => {
-            saveManagedCategory();
-        });
-    }
-
-    if (btnAddBranchManage) {
-        btnAddBranchManage.addEventListener('click', () => {
-            if (editingBranchId) resetManageBranchForm();
-            manageBranchForm.style.display = manageBranchForm.style.display === 'none' ? 'block' : 'none';
-        });
-    }
-
-    if (btnManageSaveBranch) {
-        btnManageSaveBranch.addEventListener('click', () => {
-            saveManagedBranch();
-        });
-    }
-
-    if (btnManageSaveExpense) {
-        btnManageSaveExpense.addEventListener('click', () => {
-            saveManagedExpenseTag();
-        });
-    }
-
-    if (manageProductsList) {
-        manageProductsList.addEventListener('click', (event) => {
-            const actionButton = event.target.closest('[data-action]');
-            if (!actionButton) return;
-
-            const { action, id, index, dir } = actionButton.dataset;
-
-            if (action === 'move') {
-                moveManagedProduct(Number(index), Number(dir));
-            }
-
-            if (action === 'edit') {
-                startEditingProduct(id);
-            }
-
-            if (action === 'delete') {
-                deleteManagedProduct(id);
-            }
-        });
-    }
-
-    if (manageExpenseTagsList) {
-        manageExpenseTagsList.addEventListener('click', (event) => {
-            const actionButton = event.target.closest('[data-action]');
-            if (!actionButton) return;
-
-            const { action, id } = actionButton.dataset;
-
-            if (action === 'expense-edit') {
-                startEditingExpenseTag(id);
-            }
-
-            if (action === 'expense-delete') {
-                deleteManagedExpenseTag(id);
-            }
-        });
-    }
-
-    if (manageCategoriesList) {
-        manageCategoriesList.addEventListener('click', (event) => {
-            const actionButton = event.target.closest('[data-action]');
-            if (!actionButton) return;
-
-            const { action, id } = actionButton.dataset;
-
-            if (action === 'category-move') {
-                const index = Number(actionButton.dataset.index);
-                const dir = Number(actionButton.dataset.dir);
-                const targetIndex = index + dir;
-                if (targetIndex >= 0 && targetIndex < customCategories.length) {
-                    reorderCategories(index, targetIndex);
-                }
-            }
-
-            if (action === 'category-edit') {
-                startEditingCategory(id);
-            }
-
-            if (action === 'category-delete') {
-                deleteManagedCategory(id);
-            }
-        });
-    }
-
-    if (manageBranchesList) {
-        manageBranchesList.addEventListener('click', (event) => {
-            const actionButton = event.target.closest('[data-action]');
-            if (!actionButton) return;
-
-            const { action, id } = actionButton.dataset;
-
-            if (action === 'branch-edit') {
-                startEditingBranch(id);
-            }
-
-            if (action === 'branch-delete') {
-                deleteManagedBranch(id);
-            }
-        });
-    }
-
-    if (tablesGrid) {
-        tablesGrid.addEventListener('click', (event) => {
-            const actionButton = event.target.closest('[data-table-action]');
-            if (!actionButton) return;
-
-            const { tableAction, id } = actionButton.dataset;
-
-            if (tableAction === 'edit') {
-                openTableEditor(id);
-            }
-
-            if (tableAction === 'charge') {
-                closeTable(id);
-            }
-
-            if (tableAction === 'delete') {
-                promptDeleteTable(id);
-            }
-        });
-    }
-
-    if (manageModGroupsContainer) {
-        manageModGroupsContainer.addEventListener('click', (e) => {
-            const btnRemoveGroup = e.target.closest('.btn-remove-mod-group');
-            if (btnRemoveGroup) {
-                const card = btnRemoveGroup.closest('.modifier-group-card');
-                if (card) card.remove();
-                return;
-            }
-
-            const btnAddOption = e.target.closest('.btn-add-mod-option');
-            if (btnAddOption) {
-                const card = btnAddOption.closest('.modifier-group-card');
-                const optionsList = card?.querySelector('.mod-group-options-list');
-                if (optionsList) {
-                    const div = document.createElement('div');
-                    div.innerHTML = createModifierOptionRowHtml();
-                    optionsList.appendChild(div.firstElementChild);
-                    div.querySelector('input')?.focus();
-                }
-                return;
-            }
-
-            const btnRemoveOpt = e.target.closest('.btn-remove-mod-opt');
-            if (btnRemoveOpt) {
-                const row = btnRemoveOpt.closest('.mod-option-row-edit');
-                if (row) row.remove();
-                return;
-            }
-        });
-    }
-
-    if (btnAddModGroup) {
-        btnAddModGroup.addEventListener('click', () => {
-            if (!manageModGroupsContainer) return;
-            const div = document.createElement('div');
-            div.innerHTML = createModifierGroupCardHtml();
-            manageModGroupsContainer.appendChild(div.firstElementChild);
-            div.querySelector('.mod-group-name-input')?.focus();
-        });
-    }
-
-    if (closeModifiersModalBtn) {
-        closeModifiersModalBtn.addEventListener('click', closeModifiersModal);
-    }
-
-    if (modifiersModal) {
-        modifiersModal.addEventListener('click', (e) => {
-            if (e.target === modifiersModal) closeModifiersModal();
-        });
-    }
-
-    if (modQtyMinusBtn) {
-        modQtyMinusBtn.addEventListener('click', () => {
-            if (currentModQty > 1) {
-                currentModQty--;
-                if (modQtyVal) modQtyVal.textContent = String(currentModQty);
-                updateModifiersModalTotal();
-            }
-        });
-    }
-
-    if (modQtyPlusBtn) {
-        modQtyPlusBtn.addEventListener('click', () => {
-            currentModQty++;
-            if (modQtyVal) modQtyVal.textContent = String(currentModQty);
-            updateModifiersModalTotal();
-        });
-    }
-
-    if (modModalBody) {
-        modModalBody.addEventListener('change', () => {
-            updateModifiersModalTotal();
-        });
-    }
-
-    if (btnConfirmModifiers) {
-        btnConfirmModifiers.addEventListener('click', confirmAddProductWithModifiers);
-    }
-
-    if (saleProductsGrid) {
-        saleProductsGrid.addEventListener('click', (event) => {
-            const btn = event.target.closest('button');
-            if (!btn) return;
-            
-            const productId = btn.dataset.productId;
-            const action = btn.dataset.action;
-            const product = customProducts.find(p => p.id === productId);
-            const hasModifiers = product && Array.isArray(product.modifiers) && product.modifiers.length > 0;
-            
-            if (action === 'customize') {
-                openModifiersModal(productId);
-            } else if (action === 'add' || !action) {
-                if (hasModifiers) {
-                    openModifiersModal(productId);
-                } else {
-                    addItemToCurrentSale(productId);
-                }
-            } else if (action === 'increase') {
-                if (hasModifiers) {
-                    openModifiersModal(productId);
-                } else {
-                    updateCurrentSaleItemQty(productId, 1);
-                }
-            } else if (action === 'decrease') {
-                updateCurrentSaleItemQty(productId, -1);
-            }
-        });
-    }
-
-    if (saleOrderItems) {
-        saleOrderItems.addEventListener('click', (event) => {
-            const button = event.target.closest('[data-sale-action]');
-            if (!button) return;
-
-            const { saleAction, id } = button.dataset;
-
-            if (saleAction === 'increase') updateCurrentSaleItemQty(id, 1);
-            if (saleAction === 'decrease') updateCurrentSaleItemQty(id, -1);
-            if (saleAction === 'remove') removeItemFromCurrentSale(id);
-        });
-    }
-}
-
-function switchView(viewName) {
-    Object.values(views).forEach(v => v.classList.remove('active-view'));
-    Object.values(navBtns).forEach(btn => btn.classList.remove('active'));
-
-    views[viewName].classList.add('active-view');
-    navBtns[viewName].classList.add('active');
+    if (views[viewName]) views[viewName].classList.add('active-view');
+    if (navBtns[viewName]) navBtns[viewName].classList.add('active');
 
     if (viewName === 'dashboard') updateDashboard();
-    if (viewName === 'tables') renderTablesView();
-    if (viewName === 'transactions') renderFullHistory();
+    if (viewName === 'tables') renderTablesView(getTransactions());
+    if (viewName === 'transactions') renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
     if (viewName === 'products') {
         renderManageProducts();
         renderManageExpenseTags();
@@ -1282,2252 +147,10 @@ function switchView(viewName) {
     scrollToTop();
 }
 
-function openExpenseModal(transaction = null) {
-    if (!form || !modal) return;
-    form.reset();
-    resetSelectedExpenses();
-    editingTransactionId = transaction?.id || null;
-    modalTitle.textContent = editingTransactionId ? 'Editar Gasto' : 'Registrar Gasto';
-
-    if (newExpenseForm) newExpenseForm.style.display = 'none';
-
-    if (transaction) {
-        document.getElementById('description').value = transaction.desc || '';
-        if (totalSalesAmount) totalSalesAmount.value = Number(transaction.amount) || '';
-        if (transaction.date) {
-            document.getElementById('date').value = getLocalDateInputValue(new Date(transaction.date));
-        } else {
-            document.getElementById('date').value = getLocalDateInputValue();
-        }
-    } else {
-        document.getElementById('description').value = '';
-        if (totalSalesAmount) totalSalesAmount.value = '';
-        document.getElementById('date').value = getLocalDateInputValue();
-    }
-
-    modal.classList.add('open');
-    scrollToTop();
-}
-
-function openModal(transaction = null) {
-    openExpenseModal(transaction);
-}
-
-function closeModal() {
-    editingTransactionId = null;
-    modalTitle.textContent = 'Registrar Gasto';
-    if (modal) modal.classList.remove('open');
-    resetSelectedExpenses();
-    scrollToTop();
-}
-
-function initFormZones() {
-    // Legacy stub - branches are managed in Manage Branches
-}
-
-function renderSaleBranchOptions() {
-    if (!saleBranchSelect) return;
-
-    const selectedBranchId = saleDraft.branchId;
-    const lastBranchId = loadLocalState(STORAGE_KEYS.lastBranch, null);
-    saleBranchSelect.innerHTML = '';
-
-    customBranches.forEach(branch => {
-        const option = document.createElement('option');
-        option.value = branch.id;
-        option.textContent = branch.name;
-        saleBranchSelect.appendChild(option);
-    });
-
-    if (selectedBranchId && customBranches.some(branch => branch.id === selectedBranchId)) {
-        saleBranchSelect.value = selectedBranchId;
-    } else if (lastBranchId && customBranches.some(branch => branch.id === lastBranchId)) {
-        saleBranchSelect.value = lastBranchId;
-        saleDraft.branchId = lastBranchId;
-    } else if (customBranches[0]) {
-        saleBranchSelect.value = customBranches[0].id;
-        saleDraft.branchId = customBranches[0].id;
-        saveLocalState(STORAGE_KEYS.lastBranch, saleDraft.branchId);
-    }
-}
-
-function renderTablesBranchFilter() {
-    if (!tablesBranchFilter) return;
-
-    const selectedValue = tablesBranchFilter.value;
-    tablesBranchFilter.innerHTML = '<option value="">Todas las sucursales</option>';
-
-    customBranches.filter(branch => branch.useTables).forEach(branch => {
-        const option = document.createElement('option');
-        option.value = branch.id;
-        option.textContent = branch.name;
-        tablesBranchFilter.appendChild(option);
-    });
-
-    tablesBranchFilter.value = Array.from(tablesBranchFilter.options).some(option => option.value === selectedValue)
-        ? selectedValue
-        : '';
-}
-
-function renderManageProductBranchOptions(selectedBranchIds = null) {
-    if (!manageProductBranches) return;
-
-    const selected = new Set(Array.isArray(selectedBranchIds) ? selectedBranchIds : []);
-    manageProductBranches.innerHTML = '';
-
-    customBranches.forEach(branch => {
-        const label = document.createElement('label');
-        label.className = 'inline-checkbox';
-        label.innerHTML = `
-            <input type="checkbox" value="${branch.id}" ${selected.has(branch.id) ? 'checked' : ''}>
-            <span>${branch.name}</span>
-        `;
-        manageProductBranches.appendChild(label);
-    });
-}
-
-function getSelectedManageProductBranches() {
-    return Array.from(manageProductBranches?.querySelectorAll('input[type="checkbox"]:checked') || [])
-        .map(input => input.value);
-}
-
-function renderCategoryOptions() {
-    const categoryNames = customCategories.map(item => item.name);
-
-    [manageCategoryInput, modalProductCategoryInput].forEach(select => {
-        if (!select) return;
-        const currentValue = select.value;
-        select.innerHTML = '';
-
-        categoryNames.forEach(category => {
-            const option = document.createElement('option');
-            option.value = option.textContent = category;
-            select.appendChild(option);
-        });
-
-        if (categoryNames.includes(currentValue)) {
-            select.value = currentValue;
-        }
-    });
-}
-
-function renderProductsList() {
-    if (!productsContainer) return;
-
-    productsContainer.innerHTML = '';
-    const grouped = groupProductsByCategory(customProducts);
-
-    Object.keys(grouped).forEach(cat => {
-        const groupDiv = document.createElement('div');
-        groupDiv.className = 'product-category-group';
-        groupDiv.innerHTML = `<h4>${cat}</h4>`;
-
-        grouped[cat].forEach(p => {
-            const item = document.createElement('div');
-            item.className = 'product-item';
-            item.innerHTML = `
-                <div class="product-info">
-                    <span class="product-name">${p.name}</span>
-                    <span class="product-price">$${p.price}</span>
-                </div>
-                <div class="product-controls">
-                    <button type="button" class="qty-btn minus" data-id="${p.id}">-</button>
-                    <input type="number" class="product-qty" id="qty_${p.id}" value="0" min="0" data-price="${p.price}">
-                    <button type="button" class="qty-btn plus" data-id="${p.id}">+</button>
-                </div>
-            `;
-            groupDiv.appendChild(item);
-        });
-        productsContainer.appendChild(groupDiv);
-    });
-
-    document.querySelectorAll('.qty-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const id = e.target.dataset.id;
-            const input = document.getElementById(`qty_${id}`);
-            let val = parseInt(input.value) || 0;
-            if (e.target.classList.contains('plus')) val++;
-            else if (val > 0) val--;
-            input.value = val;
-            calculateSubtotals();
-        });
-    });
-
-    document.querySelectorAll('.product-qty').forEach(input => {
-        input.addEventListener('input', calculateSubtotals);
-    });
-}
-
-function initDragAndDropContainer(container, itemSelector, onReorder) {
-    if (!container) return;
-
-    let dragSrcIndex = -1;
-    const cards = container.querySelectorAll(itemSelector);
-
-    cards.forEach(card => {
-        card.addEventListener('dragstart', (e) => {
-            dragSrcIndex = parseInt(card.getAttribute('data-index'), 10);
-            card.classList.add('dragging');
-            if (e.dataTransfer) {
-                e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/plain', String(dragSrcIndex));
-            }
-        });
-
-        card.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-            card.classList.add('drag-over');
-        });
-
-        card.addEventListener('dragleave', () => {
-            card.classList.remove('drag-over');
-        });
-
-        card.addEventListener('drop', (e) => {
-            e.preventDefault();
-            card.classList.remove('drag-over');
-            let srcIndex = dragSrcIndex;
-            if (e.dataTransfer) {
-                try {
-                    const dataVal = e.dataTransfer.getData('text/plain');
-                    if (dataVal !== '' && !isNaN(parseInt(dataVal, 10))) {
-                        srcIndex = parseInt(dataVal, 10);
-                    }
-                } catch (err) { }
-            }
-            const targetIndex = parseInt(card.getAttribute('data-index'), 10);
-            if (srcIndex !== -1 && targetIndex !== -1 && srcIndex !== targetIndex) {
-                onReorder(srcIndex, targetIndex);
-            }
-        });
-
-        card.addEventListener('dragend', () => {
-            cards.forEach(el => el.classList.remove('dragging', 'drag-over'));
-            dragSrcIndex = -1;
-        });
-
-        // Touch events for mobile/tablet drag handles
-        const handle = card.querySelector('.drag-handle');
-        if (!handle) return;
-
-        let touchActiveCard = null;
-        let touchSrcIndex = -1;
-
-        handle.addEventListener('touchstart', (e) => {
-            touchActiveCard = card;
-            touchSrcIndex = parseInt(card.getAttribute('data-index'), 10);
-            card.classList.add('dragging');
-        }, { passive: true });
-
-        handle.addEventListener('touchmove', (e) => {
-            if (!touchActiveCard) return;
-            const touch = e.touches[0];
-            const elem = document.elementFromPoint(touch.clientX, touch.clientY);
-            cards.forEach(el => el.classList.remove('drag-over'));
-            if (elem) {
-                const targetCard = elem.closest(itemSelector);
-                if (targetCard && targetCard !== touchActiveCard) {
-                    targetCard.classList.add('drag-over');
-                }
-            }
-        }, { passive: false });
-
-        handle.addEventListener('touchend', (e) => {
-            if (!touchActiveCard) return;
-            touchActiveCard.classList.remove('dragging');
-            const touch = e.changedTouches[0];
-            const elem = document.elementFromPoint(touch.clientX, touch.clientY);
-            cards.forEach(el => el.classList.remove('drag-over'));
-
-            if (elem) {
-                const targetCard = elem.closest(itemSelector);
-                if (targetCard && targetCard !== touchActiveCard) {
-                    const targetIndex = parseInt(targetCard.getAttribute('data-index'), 10);
-                    if (touchSrcIndex !== -1 && targetIndex !== -1 && touchSrcIndex !== targetIndex) {
-                        onReorder(touchSrcIndex, targetIndex);
-                    }
-                }
-            }
-            touchActiveCard = null;
-            touchSrcIndex = -1;
-        });
-    });
-}
-
-function reorderProducts(fromIndex, toIndex) {
-    if (fromIndex < 0 || fromIndex >= customProducts.length) return;
-    if (toIndex < 0 || toIndex >= customProducts.length) return;
-
-    const [moved] = customProducts.splice(fromIndex, 1);
-    customProducts.splice(toIndex, 0, moved);
-    saveProductsState();
-}
-
-function reorderCategories(fromIndex, toIndex) {
-    if (fromIndex < 0 || fromIndex >= customCategories.length) return;
-    if (toIndex < 0 || toIndex >= customCategories.length) return;
-
-    const [moved] = customCategories.splice(fromIndex, 1);
-    customCategories.splice(toIndex, 0, moved);
-    saveCategoriesState();
-}
-
-function sortProductsAlphabetically() {
-    const productsBranchSelect = document.getElementById('products-branch-filter');
-    const selectedBranchId = productsBranchSelect ? productsBranchSelect.value : '';
-
-    if (selectedBranchId) {
-        const branchObj = getBranchById(selectedBranchId);
-        const branchName = branchObj ? branchObj.name : 'la sucursal';
-
-        const subset = customProducts.filter(p => productAvailableInBranch(p, selectedBranchId));
-        if (subset.length === 0) {
-            showToast("No hay productos en esta sucursal");
-            return;
-        }
-
-        const sortedSubset = [...subset].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
-
-        let subIdx = 0;
-        customProducts = customProducts.map(p => {
-            if (productAvailableInBranch(p, selectedBranchId)) {
-                return sortedSubset[subIdx++];
-            }
-            return p;
-        });
-
-        saveProductsState();
-        showToast(`Productos de ${branchName} ordenados A-Z`);
-    } else {
-        customProducts = sortNamedListAlphabetically(customProducts);
-        saveProductsState();
-        showToast("Todos los productos ordenados A-Z");
-    }
-}
-
-function sortCategoriesAlphabetically() {
-    customCategories = sortNamedListAlphabetically(customCategories);
-    saveCategoriesState();
-    showToast("Categorías ordenadas alfabéticamente");
-}
-
-function renderManageProducts() {
-    if (!manageProductsList) return;
-
-    const productsBranchSelect = document.getElementById('products-branch-filter');
-    if (productsBranchSelect && customBranches.length > 0) {
-        const currentVal = productsBranchSelect.value;
-        const lastBranch = localStorage.getItem(STORAGE_KEYS.lastBranch) || '';
-        
-        productsBranchSelect.innerHTML = '<option value="">Todas las sucursales</option>' +
-            customBranches.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
-
-        if (currentVal && Array.from(productsBranchSelect.options).some(o => o.value === currentVal)) {
-            productsBranchSelect.value = currentVal;
-        } else if (lastBranch && Array.from(productsBranchSelect.options).some(o => o.value === lastBranch)) {
-            productsBranchSelect.value = lastBranch;
-        } else {
-            productsBranchSelect.value = '';
-        }
-    }
-
-    const selectedBranchId = productsBranchSelect ? productsBranchSelect.value : '';
-
-    const filteredProducts = selectedBranchId
-        ? customProducts.filter(p => productAvailableInBranch(p, selectedBranchId))
-        : customProducts;
-
-    manageProductsList.innerHTML = '';
-    manageProductsList.className = 'view-products-grid';
-
-    if (filteredProducts.length === 0) {
-        manageProductsList.innerHTML = `<div class="card" style="grid-column:1/-1; text-align:center; color:var(--text-muted); padding:2rem;">No hay productos registrados ${selectedBranchId ? 'para esta sucursal' : ''}.</div>`;
-        return;
-    }
-
-    filteredProducts.forEach((p) => {
-        const realIndex = customProducts.findIndex(item => item.id === p.id);
-        const div = document.createElement('div');
-        div.className = 'product-manage-card';
-        div.setAttribute('draggable', 'true');
-        div.setAttribute('data-id', p.id);
-        div.setAttribute('data-index', realIndex);
-
-        div.innerHTML = `
-            <div style="display:flex; align-items:center; gap:0.5rem; flex-grow:1;">
-                <div class="drag-handle" title="Arrastrar para reordenar">
-                    <i class="ph ph-dots-six-vertical" style="font-size:1.3rem;"></i>
-                </div>
-                <div style="display:flex; flex-direction:column; gap:0.2rem;">
-                    <button class="btn-icon" data-action="move" data-index="${realIndex}" data-dir="-1" ${realIndex === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
-                    <button class="btn-icon" data-action="move" data-index="${realIndex}" data-dir="1" ${realIndex === customProducts.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
-                </div>
-                <div>
-                    <div style="font-weight: 500;">${p.name} <small style="color:var(--text-muted)">(${p.category || 'Sin categoría'})</small></div>
-                    <div style="color: var(--success); font-size: 0.9rem;">$${p.price}</div>
-                    <div style="color: var(--text-muted); font-size: 0.8rem;">${Array.isArray(p.availableInBranches) && p.availableInBranches.length > 0 ? `${p.availableInBranches.length} sucursales asignadas` : 'Disponible en todas las sucursales'}</div>
-                    ${Array.isArray(p.modifiers) && p.modifiers.length > 0 ? `<div style="color: var(--primary); font-size: 0.8rem; margin-top: 0.2rem;"><i class="ph ph-sliders"></i> ${p.modifiers.length} grupo${p.modifiers.length === 1 ? '' : 's'} de opciones (${p.modifiers.map(g => g.name).join(', ')})</div>` : ''}
-                </div>
-            </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <button class="btn-icon" data-action="edit" data-id="${p.id}"><i class="ph ph-pencil-simple"></i></button>
-                <button class="btn-icon delete" data-action="delete" data-id="${p.id}"><i class="ph ph-trash"></i></button>
-            </div>
-        `;
-        manageProductsList.appendChild(div);
-    });
-
-    initDragAndDropContainer(manageProductsList, '.product-manage-card', reorderProducts);
-}
-
-function saveProductsState() {
-    customProducts = customProducts.map((product, index) => ({ ...normalizeProduct(product, index), order: index }));
-    saveLocalState(STORAGE_KEYS.products, customProducts);
-    renderManageProducts();
-    renderProductsList();
-    renderSaleProducts();
-    syncProductsToCloud();
-}
-
-async function renameTransactionsBranch(oldName, newName) {
-    if (!oldName || !newName || oldName === newName) return;
-
-    transactions = transactions.map((transaction) => transaction.zone === oldName
-        ? { ...transaction, zone: newName }
-        : transaction
-    );
-    saveLocalState(STORAGE_KEYS.transactions, transactions);
-    updateDashboard();
-    if (views.transactions.classList.contains('active-view')) {
-        renderFullHistory();
-    }
-
-    if (!db) return;
-
-    try {
-        const affectedTransactions = await getDocs(query(collection(db, "transactions"), where("zone", "==", oldName)));
-        if (affectedTransactions.empty) return;
-
-        const batch = writeBatch(db);
-        affectedTransactions.forEach((item) => {
-            batch.update(doc(db, "transactions", item.id), { zone: newName });
-        });
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron actualizar las sucursales en el historial:", error);
-    }
-}
-
-function saveBranchesState() {
-    customBranches = sortNamedListAlphabetically(customBranches);
-    saveLocalState(STORAGE_KEYS.branches, customBranches);
-    initFormZones();
-    renderManageBranches();
-    renderManageProductBranchOptions();
-    renderTablesBranchFilter();
-    renderSaleBranchOptions();
-    renderSaleProducts();
-    renderTablesView();
-    updateDashboard();
-    syncBranchesToCloud();
-}
-
-function saveCategoriesState() {
-    customCategories = customCategories.map((category, index) => ({ ...category, order: index }));
-    saveLocalState(STORAGE_KEYS.categories, customCategories);
-    renderCategoryOptions();
-    renderManageCategories();
-    renderManageProducts();
-    renderProductsList();
-    syncCategoriesToCloud();
-}
-
-function createModifierOptionRowHtml(opt = null) {
-    const optName = typeof opt === 'string' ? opt : (opt?.name || '');
-    const optPrice = typeof opt === 'object' && opt?.price ? opt.price : '';
-
-    return `
-        <div class="mod-option-row-edit">
-            <input type="text" class="mod-opt-name-input" placeholder="Opción (ej. Barbecue)" value="${escapeHtml(optName)}">
-            <input type="number" class="mod-opt-price-input" placeholder="Extra $" min="0" step="0.5" value="${optPrice}">
-            <button type="button" class="btn-icon delete btn-remove-mod-opt" title="Quitar opción"><i class="ph ph-x"></i></button>
-        </div>
-    `;
-}
-
-function createModifierGroupCardHtml(group = null) {
-    const groupId = group?.id || `mod_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    const groupName = group?.name || '';
-    const groupType = group?.type === 'multiple' ? 'multiple' : 'single';
-    const options = Array.isArray(group?.options) && group.options.length > 0 ? group.options : [
-        { name: '', price: 0 }
-    ];
-
-    return `
-        <div class="modifier-group-card" data-group-id="${groupId}">
-            <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;">
-                <input type="text" class="mod-group-name-input" placeholder="Nombre (ej. Salsa)" value="${escapeHtml(groupName)}" required>
-                <select class="mod-group-type-select">
-                    <option value="single" ${groupType === 'single' ? 'selected' : ''}>1 sola opción (Radio)</option>
-                    <option value="multiple" ${groupType === 'multiple' ? 'selected' : ''}>Varias opciones (Casillas)</option>
-                </select>
-                <button type="button" class="btn-icon delete btn-remove-mod-group" title="Eliminar grupo"><i class="ph ph-trash"></i></button>
-            </div>
-            <div class="mod-group-options-list" style="display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.5rem;">
-                ${options.map(opt => createModifierOptionRowHtml(opt)).join('')}
-            </div>
-            <button type="button" class="btn-text btn-add-mod-option" style="font-size: 0.8rem; padding: 0.2rem 0.5rem;">
-                <i class="ph ph-plus"></i> Agregar opción
-            </button>
-        </div>
-    `;
-}
-
-function renderManageProductModifiers(modifiers = []) {
-    if (!manageModGroupsContainer) return;
-    manageModGroupsContainer.innerHTML = '';
-    if (Array.isArray(modifiers) && modifiers.length > 0) {
-        modifiers.forEach(group => {
-            const div = document.createElement('div');
-            div.innerHTML = createModifierGroupCardHtml(group);
-            manageModGroupsContainer.appendChild(div.firstElementChild);
-        });
-    }
-}
-
-function getManageProductModifiers() {
-    if (!manageModGroupsContainer) return [];
-    const groupCards = manageModGroupsContainer.querySelectorAll('.modifier-group-card');
-    const result = [];
-
-    groupCards.forEach(card => {
-        const nameInput = card.querySelector('.mod-group-name-input');
-        const typeSelect = card.querySelector('.mod-group-type-select');
-        const groupName = nameInput ? nameInput.value.trim() : '';
-        const groupType = typeSelect ? typeSelect.value : 'single';
-        const groupId = card.dataset.groupId || `mod_${Date.now()}`;
-
-        if (!groupName) return;
-
-        const optionRows = card.querySelectorAll('.mod-option-row-edit');
-        const options = [];
-
-        optionRows.forEach(row => {
-            const optNameInput = row.querySelector('.mod-opt-name-input');
-            const optPriceInput = row.querySelector('.mod-opt-price-input');
-            const optName = optNameInput ? optNameInput.value.trim() : '';
-            const optPrice = optPriceInput ? (parseFloat(optPriceInput.value) || 0) : 0;
-
-            if (optName) {
-                options.push({
-                    id: `opt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-                    name: optName,
-                    price: optPrice
-                });
-            }
-        });
-
-        if (options.length > 0) {
-            result.push({
-                id: groupId,
-                name: groupName,
-                type: groupType,
-                options
-            });
-        }
-    });
-
-    return result;
-}
-
-function resetManageProductForm() {
-    editingProductId = null;
-    manageNameInput.value = '';
-    managePriceInput.value = '';
-    manageCategoryInput.value = customCategories[0]?.name || '';
-    renderManageProductBranchOptions();
-    renderManageProductModifiers([]);
-    btnManageSaveProd.textContent = 'Guardar';
-}
-
-function saveManagedProduct() {
-    const name = manageNameInput.value.trim();
-    const price = parseFloat(managePriceInput.value);
-    const category = manageCategoryInput.value;
-    const availableInBranches = getSelectedManageProductBranches();
-    const modifiers = getManageProductModifiers();
-
-    if (!name || isNaN(price)) return;
-
-    if (editingProductId) {
-        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches, modifiers }, editingProductId);
-        showToast("Producto actualizado");
-    } else {
-        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches, modifiers });
-        showToast("Producto guardado");
-    }
-
-    saveProductsState();
-    resetManageProductForm();
-    manageForm.style.display = 'none';
-}
-
-function upsertNamedItem(items, payload, prefix, currentId = null) {
-    if (currentId) {
-        return items.map(item => item.id === currentId ? { ...item, ...payload } : item);
-    }
-
-    return [
-        ...items,
-        {
-            id: `${prefix}_${Date.now()}`,
-            name: payload.name,
-            order: items.length,
-            ...(prefix === 'branch' ? { useTables: Boolean(payload.useTables) } : {})
-        }
-    ];
-}
-
-function moveManagedProduct(index, dir) {
-    customProducts = moveProductInList(customProducts, index, dir);
-    saveProductsState();
-}
-
-function startEditingProduct(id) {
-    const product = customProducts.find(p => p.id === id);
-    if (!product) return;
-
-    editingProductId = id;
-    manageNameInput.value = product.name;
-    managePriceInput.value = product.price;
-    manageCategoryInput.value = product.category;
-    renderManageProductBranchOptions(product.availableInBranches || []);
-    renderManageProductModifiers(product.modifiers || []);
-    btnManageSaveProd.textContent = 'Actualizar';
-    manageForm.style.display = 'block';
-    manageNameInput.focus();
-}
-
-function deleteManagedProduct(id) {
-    if (confirm("¿Estás seguro de que quieres eliminar este producto?")) {
-        customProducts = removeProductById(customProducts, id);
-        if (editingProductId === id) {
-            resetManageProductForm();
-            manageForm.style.display = 'none';
-        }
-        saveProductsState();
-    }
-}
-
-function resetManageCategoryForm() {
-    editingCategoryId = null;
-    manageCategoryNameInput.value = '';
-    btnManageSaveCategory.textContent = 'Guardar';
-}
-
-function renderManageCategories() {
-    if (!manageCategoriesList) return;
-
-    manageCategoriesList.innerHTML = '';
-    manageCategoriesList.className = 'view-products-grid';
-
-    customCategories.forEach((category, index) => {
-        const div = document.createElement('div');
-        div.className = 'product-manage-card category-manage-card';
-        div.setAttribute('draggable', 'true');
-        div.setAttribute('data-id', category.id);
-        div.setAttribute('data-index', index);
-
-        div.innerHTML = `
-            <div style="display:flex; align-items:center; gap:0.5rem; flex-grow:1;">
-                <div class="drag-handle" title="Arrastrar para reordenar">
-                    <i class="ph ph-dots-six-vertical" style="font-size:1.3rem;"></i>
-                </div>
-                <div style="display:flex; flex-direction:column; gap:0.2rem;">
-                    <button class="btn-icon" data-action="category-move" data-index="${index}" data-dir="-1" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
-                    <button class="btn-icon" data-action="category-move" data-index="${index}" data-dir="1" ${index === customCategories.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
-                </div>
-                <div>
-                    <div style="font-weight: 500;">${category.name}</div>
-                    <div style="color: var(--text-muted); font-size: 0.85rem;">Categoría disponible</div>
-                </div>
-            </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <button class="btn-icon" data-action="category-edit" data-id="${category.id}"><i class="ph ph-pencil-simple"></i></button>
-                <button class="btn-icon delete" data-action="category-delete" data-id="${category.id}"><i class="ph ph-trash"></i></button>
-            </div>
-        `;
-        manageCategoriesList.appendChild(div);
-    });
-
-    initDragAndDropContainer(manageCategoriesList, '.category-manage-card', reorderCategories);
-}
-
-function saveManagedCategory() {
-    const name = manageCategoryNameInput.value.trim();
-    if (!name) return;
-    const isEditing = Boolean(editingCategoryId);
-    const existingCategory = editingCategoryId
-        ? customCategories.find(item => item.id === editingCategoryId)
-        : null;
-    const previousName = existingCategory?.name || null;
-
-    if (hasDuplicateName(customCategories, name, editingCategoryId)) {
-        showToast("Esa categoría ya existe");
-        return;
-    }
-
-    if (previousName && previousName !== name) {
-        customProducts = customProducts.map(product => product.category === previousName
-            ? { ...product, category: name }
-            : product
-        );
-        saveProductsState();
-    }
-
-    customCategories = upsertNamedItem(customCategories, { name }, 'cat', editingCategoryId);
-    saveCategoriesState();
-    resetManageCategoryForm();
-    manageCategoryForm.style.display = 'none';
-    showToast(isEditing ? "Categoría actualizada" : "Categoría guardada");
-}
-
-function startEditingCategory(id) {
-    const category = customCategories.find(item => item.id === id);
-    if (!category) return;
-
-    editingCategoryId = id;
-    manageCategoryNameInput.value = category.name;
-    btnManageSaveCategory.textContent = 'Actualizar';
-    manageCategoryForm.style.display = 'block';
-    manageCategoryNameInput.focus();
-}
-
-function deleteManagedCategory(id) {
-    const category = customCategories.find(item => item.id === id);
-    if (!category) return;
-
-    const remainingCategories = customCategories.filter(item => item.id !== id);
-    if (remainingCategories.length === 0) {
-        showToast("Debe quedar al menos una categoría");
-        return;
-    }
-
-    if (confirm(`¿Eliminar la categoría "${category.name}"? Los productos de esa categoría pasarán a "${remainingCategories[0].name}".`)) {
-        customProducts = customProducts.map(product => product.category === category.name
-            ? { ...product, category: remainingCategories[0].name }
-            : product
-        );
-        saveProductsState();
-        customCategories = remainingCategories;
-        saveCategoriesState();
-        if (editingCategoryId === id) {
-            resetManageCategoryForm();
-            manageCategoryForm.style.display = 'none';
-        }
-        showToast("Categoría eliminada");
-    }
-}
-
-function resetManageBranchForm() {
-    editingBranchId = null;
-    manageBranchNameInput.value = '';
-    manageBranchUseTables.checked = false;
-    btnManageSaveBranch.textContent = 'Guardar';
-}
-
-function renderManageBranches() {
-    if (!manageBranchesList) return;
-
-    manageBranchesList.innerHTML = '';
-    manageBranchesList.className = 'view-products-grid';
-
-    customBranches.forEach(branch => {
-        const div = document.createElement('div');
-        div.className = 'product-manage-card';
-        div.innerHTML = `
-            <div>
-                <div style="font-weight: 500;">${branch.name}</div>
-                <div style="color: var(--text-muted); font-size: 0.85rem;">${branch.useTables ? 'Con mesas abiertas' : 'Venta directa'}</div>
-            </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <button class="btn-icon" data-action="branch-edit" data-id="${branch.id}"><i class="ph ph-pencil-simple"></i></button>
-                <button class="btn-icon delete" data-action="branch-delete" data-id="${branch.id}"><i class="ph ph-trash"></i></button>
-            </div>
-        `;
-        manageBranchesList.appendChild(div);
-    });
-}
-
-function saveManagedBranch() {
-    const name = manageBranchNameInput.value.trim();
-    const useTables = Boolean(manageBranchUseTables.checked);
-    if (!name) return;
-    const isEditing = Boolean(editingBranchId);
-    const existingBranch = editingBranchId
-        ? customBranches.find(item => item.id === editingBranchId)
-        : null;
-    const previousName = existingBranch?.name || null;
-
-    if (hasDuplicateName(customBranches, name, editingBranchId)) {
-        showToast("Esa sucursal ya existe");
-        return;
-    }
-
-    customBranches = upsertNamedItem(customBranches, { name, useTables }, 'branch', editingBranchId);
-    saveBranchesState();
-    if (previousName && previousName !== name) {
-        renameTransactionsBranch(previousName, name);
-    }
-    resetManageBranchForm();
-    manageBranchForm.style.display = 'none';
-    showToast(isEditing ? "Sucursal actualizada" : "Sucursal guardada");
-}
-
-function startEditingBranch(id) {
-    const branch = customBranches.find(item => item.id === id);
-    if (!branch) return;
-
-    editingBranchId = id;
-    manageBranchNameInput.value = branch.name;
-    manageBranchUseTables.checked = Boolean(branch.useTables);
-    btnManageSaveBranch.textContent = 'Actualizar';
-    manageBranchForm.style.display = 'block';
-    manageBranchNameInput.focus();
-}
-
-function deleteManagedBranch(id) {
-    if (customBranches.length <= 1) {
-        showToast("Debe quedar al menos una sucursal");
-        return;
-    }
-
-    const branch = customBranches.find(item => item.id === id);
-    if (!branch) return;
-
-    if (confirm(`¿Eliminar la sucursal "${branch.name}"?`)) {
-        customBranches = customBranches.filter(item => item.id !== id);
-        saveBranchesState();
-        if (editingBranchId === id) {
-            resetManageBranchForm();
-            manageBranchForm.style.display = 'none';
-        }
-        showToast("Sucursal eliminada");
-    }
-}
-
-function upsertExpenseTag(tags, payload, currentId = null) {
-    if (currentId) {
-        return tags.map((tag, index) => tag.id === currentId
-            ? { ...tag, ...payload, order: index }
-            : tag
-        );
-    }
-
-    return [
-        ...tags,
-        {
-            id: `exp_${Date.now()}`,
-            name: payload.name,
-            order: tags.length
-        }
-    ];
-}
-
-function removeExpenseTagById(tags, id) {
-    return tags
-        .filter(tag => tag.id !== id)
-        .map((tag, index) => ({ ...tag, order: index }));
-}
-
-function saveExpenseTagsState() {
-    customExpenseTags = sortNamedListAlphabetically(customExpenseTags);
-    saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
-    renderExpenseTags();
-    renderManageExpenseTags();
-    syncExpenseTagsToCloud();
-}
-
-function resetManageExpenseForm() {
-    editingExpenseTagId = null;
-    manageExpenseNameInput.value = '';
-    btnManageSaveExpense.textContent = 'Guardar';
-}
-
-function saveManagedExpenseTag() {
-    const name = manageExpenseNameInput.value.trim();
-    if (!name) return;
-
-    if (hasDuplicateName(customExpenseTags, name, editingExpenseTagId)) {
-        showToast("Ese atajo ya está registrado");
-        return;
-    }
-
-    if (editingExpenseTagId) {
-        customExpenseTags = upsertExpenseTag(customExpenseTags, { name }, editingExpenseTagId);
-        showToast("Acceso actualizado");
-    } else {
-        customExpenseTags = upsertExpenseTag(customExpenseTags, { name });
-        showToast("Acceso guardado");
-    }
-
-    saveExpenseTagsState();
-    resetManageExpenseForm();
-    manageExpenseForm.style.display = 'none';
-}
-
-function renderManageExpenseTags() {
-    if (!manageExpenseTagsList) return;
-
-    manageExpenseTagsList.innerHTML = '';
-    manageExpenseTagsList.className = 'view-products-grid';
-
-    customExpenseTags.forEach((tag, index) => {
-        const div = document.createElement('div');
-        div.className = 'product-manage-card';
-        div.innerHTML = `
-            <div style="display:flex; align-items:center; gap:0.75rem;">
-                <div>
-                    <div style="font-weight: 500;">${tag.name}</div>
-                    <div style="color: var(--text-muted); font-size: 0.85rem;">Atajo de gasto en orden alfabético</div>
-                </div>
-            </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <button class="btn-icon" data-action="expense-edit" data-id="${tag.id}"><i class="ph ph-pencil-simple"></i></button>
-                <button class="btn-icon delete" data-action="expense-delete" data-id="${tag.id}"><i class="ph ph-trash"></i></button>
-            </div>
-        `;
-        manageExpenseTagsList.appendChild(div);
-    });
-}
-
-function startEditingExpenseTag(id) {
-    const tag = customExpenseTags.find(item => item.id === id);
-    if (!tag) return;
-
-    editingExpenseTagId = id;
-    manageExpenseNameInput.value = tag.name;
-    btnManageSaveExpense.textContent = 'Actualizar';
-    manageExpenseForm.style.display = 'block';
-    manageExpenseNameInput.focus();
-}
-
-function deleteManagedExpenseTag(id) {
-    if (confirm("¿Estás seguro de que quieres eliminar este acceso de gasto?")) {
-        customExpenseTags = removeExpenseTagById(customExpenseTags, id);
-        if (editingExpenseTagId === id) {
-            resetManageExpenseForm();
-            manageExpenseForm.style.display = 'none';
-        }
-        saveExpenseTagsState();
-    }
-}
-
-function downloadImageSummary() {
-    const data = getFilteredData();
-    const summaryNode = buildExportSummary(data);
-    showToast("Generando captura... por favor espera");
-    setTimeout(async () => {
-        try {
-            document.body.appendChild(summaryNode);
-            const canvas = await html2canvas(summaryNode, {
-                backgroundColor: '#f8fafc',
-                scale: 2,
-                useCORS: true
-            });
-            summaryNode.remove();
-            const link = document.createElement('a');
-            const dStr = new Date().toISOString().slice(0, 10);
-            link.download = `Resumen_Barra_${currentFilter}_${dStr}.png`;
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-            showToast("Resumen visual descargado");
-        } catch (e) {
-            summaryNode.remove();
-            console.error(e);
-            showToast("Error al generar la imagen");
-        }
-    }, 600);
-}
-
-function getFilterLabel() {
-    const labels = {
-        day: 'Hoy',
-        week: 'Esta semana',
-        month: 'Este mes',
-        year: 'Este ano',
-        all: 'Todo el historial',
-        custom: customDateLabel || 'Fechas personalizadas'
-    };
-
-    return labels[currentFilter] || 'Resumen';
-}
-
-function formatExportDate(dateValue) {
-    if (!dateValue) return 'Sin fecha';
-
-    const date = new Date(dateValue);
-    if (isNaN(date.getTime())) return 'Sin fecha';
-
-    return date.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-function buildExportSummary(data) {
-    let ingresos = 0;
-    let gastos = 0;
-
-    data.forEach(item => {
-        if (item.type === 'income') ingresos += item.amount;
-        else gastos += item.amount;
-    });
-
-    const recentRows = [...data]
-        .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0))
-        .slice(0, 6)
-        .map(item => `
-            <tr>
-                <td>${formatExportDate(item.date)}</td>
-                <td>${item.type === 'income' ? 'Ingreso' : 'Gasto'}</td>
-                <td>${item.desc || 'Sin descripcion'}</td>
-                <td style="text-align:right; color:${item.type === 'income' ? '#047857' : '#b91c1c'}; font-weight:700;">
-                    ${item.type === 'income' ? '+' : '-'}${formatMoney(item.amount)}
-                </td>
-            </tr>
-        `)
-        .join('');
-
-    const topSellerRows = getTopSellerStats(data)
-        .slice(0, 6)
-        .map(([, stats]) => `
-            <tr>
-                <td>${stats.label}</td>
-                <td style="text-align:right;">${stats.qty}</td>
-                <td style="text-align:right; font-weight:700;">${formatMoney(stats.total)}</td>
-            </tr>
-        `)
-        .join('');
-
-    const wrapper = document.createElement('div');
-    wrapper.className = 'export-summary-canvas';
-    wrapper.innerHTML = `
-        <div class="export-summary-sheet">
-            <div class="export-summary-header">
-                <div>
-                    <div class="export-kicker">La Barra</div>
-                    <h2>Resumen del negocio</h2>
-                    <p>${getFilterLabel()}</p>
-                </div>
-                <div class="export-stamp">
-                    <span>Generado</span>
-                    <strong>${new Date().toLocaleDateString('es-MX')}</strong>
-                </div>
-            </div>
-            <div class="export-summary-grid">
-                <div class="export-stat income">
-                    <span>Ventas</span>
-                    <strong>${formatMoney(ingresos)}</strong>
-                </div>
-                <div class="export-stat expense">
-                    <span>Gastos</span>
-                    <strong>${formatMoney(gastos)}</strong>
-                </div>
-                <div class="export-stat profit">
-                    <span>Ganancia neta</span>
-                    <strong>${formatMoney(ingresos - gastos)}</strong>
-                </div>
-            </div>
-            <div class="export-columns">
-                <section class="export-panel">
-                    <h3>Movimientos recientes</h3>
-                    <table class="export-table">
-                        <thead>
-                            <tr>
-                                <th>Fecha</th>
-                                <th>Tipo</th>
-                                <th>Descripcion</th>
-                                <th style="text-align:right;">Monto</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${recentRows || '<tr><td colspan="4" style="text-align:center; color:#64748b;">Sin movimientos en este periodo</td></tr>'}
-                        </tbody>
-                    </table>
-                </section>
-                <section class="export-panel">
-                    <h3>Productos vendidos</h3>
-                    <table class="export-table">
-                        <thead>
-                            <tr>
-                                <th>Producto</th>
-                                <th style="text-align:right;">Cantidad</th>
-                                <th style="text-align:right;">Total</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${topSellerRows || '<tr><td colspan="3" style="text-align:center; color:#64748b;">Sin productos vendidos</td></tr>'}
-                        </tbody>
-                    </table>
-                </section>
-            </div>
-        </div>
-    `;
-
-    return wrapper;
-}
-
-function downloadCSV() {
-    const data = getFilteredData();
-    if (data.length === 0) {
-        showToast("No hay datos en este periodo para exportar");
-        return;
-    }
-
-    let csvContent = "\uFEFFFecha,Tipo,Monto,Categoria,Zona,Descripcion\n";
-
-    data.forEach(t => {
-        let type = t.type === 'income' ? 'Ingreso' : 'Gasto';
-        let date = "Desconocida";
-        try { if (t.date) date = new Date(t.date).toLocaleDateString('es-ES'); } catch (e) { }
-
-        let desc = '"' + (t.desc || '').replace(/"/g, '""') + '"';
-        let cat = '"' + (t.category || '').replace(/"/g, '""') + '"';
-        let zone = '"' + (t.zone || '').replace(/"/g, '""') + '"';
-
-        csvContent += `${date},${type},${t.amount},${cat},${zone},${desc}\n`;
-    });
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.setAttribute("href", url);
-    const dStr = new Date().toISOString().slice(0, 10);
-    link.setAttribute("download", `Respaldo_${currentFilter}_${dStr}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast("Respaldo descargado");
-}
-
-
-function setSaleMobilePanel(panel = 'menu') {
-    if (!saleLayout || !saleMobileSwitch) return;
-
-    saleLayout.classList.remove('show-menu', 'show-order');
-    saleLayout.classList.add(panel === 'order' ? 'show-order' : 'show-menu');
-
-    saleMobileSwitch.querySelectorAll('[data-sale-panel]').forEach(button => {
-        button.classList.toggle('active', button.dataset.salePanel === panel);
-    });
-
-    if (mobileSaleSummary) {
-        mobileSaleSummary.style.display = (panel === 'menu' && saleDraft.items.length > 0) ? 'flex' : 'none';
-    }
-}
-
-function startNewSale() {
-    if (customBranches.length === 0) {
-        showToast("Crea al menos una sucursal antes de registrar ventas");
-        return;
-    }
-    activeSaleContext = { mode: 'sale', tableId: null };
-    
-    let initialBranchId = customBranches[0]?.id || '';
-    const lastBranchId = loadLocalState(STORAGE_KEYS.lastBranch, null);
-    if (lastBranchId && customBranches.some(b => b.id === lastBranchId)) {
-        initialBranchId = lastBranchId;
-    }
-
-    saleDraft = createEmptySaleDraft({ branchId: initialBranchId });
-    if (saleDateInput) saleDateInput.value = getLocalDateInputValue();
-    renderSaleBranchOptions();
-    renderSaleProducts();
-    renderSaleSummary();
-    updateSaleModalMeta();
-    setSaleMobilePanel('menu');
-    saleModal.classList.add('open');
-    scrollToTop();
-}
-
-function closeSaleModal() {
-    saleModal.classList.remove('open');
-    activeSaleContext = { mode: 'sale', tableId: null };
-    saleDraft = createEmptySaleDraft();
-    setSaleMobilePanel('menu');
-    scrollToTop();
-}
-
-function openSaleEditor(transaction) {
-    if (!transaction) return;
-
-    let branchId = transaction.branchId || transaction.branch || '';
-    if (!customBranches.some(b => b.id === branchId)) {
-        const matchingByName = customBranches.find(b => b.name === transaction.zone || b.name === transaction.branch);
-        if (matchingByName) {
-            branchId = matchingByName.id;
-        } else {
-            branchId = customBranches[0]?.id || '';
-        }
-    }
-
-    let items = [];
-    if (Array.isArray(transaction.itemsSoldArray) && transaction.itemsSoldArray.length > 0) {
-        items = transaction.itemsSoldArray.map((item, idx) => {
-            const product = customProducts.find(p => p.id === item.productId || p.name === (item.rawName || item.name));
-            const prodId = item.productId || product?.id || `p_${idx}`;
-            const prodName = item.rawName || product?.name || item.name;
-            const selectedModifiers = Array.isArray(item.modifiers) 
-                ? item.modifiers 
-                : (Array.isArray(item.selectedModifiers) ? item.selectedModifiers : []);
-            const modifierText = item.modifierText || '';
-            const modSignature = selectedModifiers.map(m => `${m.groupName}:${m.optionName}`).sort().join('|');
-            const qty = Number(item.qty) || 1;
-            const price = Number(item.price) || (Number(item.total) / qty) || (product?.price || 0);
-
-            return {
-                id: `item_${prodId}_${Date.now()}_${idx}`,
-                productId: prodId,
-                name: prodName,
-                basePrice: product?.price || price,
-                price,
-                qty,
-                selectedModifiers,
-                modifierText,
-                modSignature
-            };
-        });
-    } else {
-        const legacyItems = getItemsForTransaction(transaction);
-        items = legacyItems.map((item, idx) => {
-            const product = customProducts.find(p => p.name === item.name);
-            const qty = Number(item.qty) || 1;
-            const price = (Number(item.total) / qty) || (product?.price || 0);
-            return {
-                id: `item_${product?.id || idx}_${Date.now()}_${idx}`,
-                productId: product?.id || `p_${idx}`,
-                name: item.name,
-                basePrice: product?.price || price,
-                price,
-                qty,
-                selectedModifiers: [],
-                modifierText: '',
-                modSignature: ''
-            };
-        });
-    }
-
-    activeSaleContext = {
-        mode: 'edit-transaction',
-        transactionId: transaction.id,
-        originalTransaction: transaction
-    };
-
-    saleDraft = createEmptySaleDraft({
-        branchId,
-        items,
-        total: typeof transaction.amount === 'number' ? transaction.amount : getItemsTotal(items)
-    });
-
-    if (saleDateInput) {
-        saleDateInput.value = transaction.date ? getLocalDateInputValue(new Date(transaction.date)) : getLocalDateInputValue();
-    }
-
-    renderSaleBranchOptions();
-    if (saleBranchSelect) saleBranchSelect.value = branchId;
-    saleDraft.branchId = branchId;
-    renderSaleProducts();
-    renderSaleSummary();
-    updateSaleModalMeta();
-    setSaleMobilePanel('menu');
-    saleModal.classList.add('open');
-    scrollToTop();
-}
-
-function updateSaleModalMeta() {
-    const branch = getBranchById(saleDraft.branchId);
-    const isTableMode = activeSaleContext.mode === 'table';
-    const isEditMode = activeSaleContext.mode === 'edit-transaction';
-
-    if (isTableMode) {
-        saleModalTitle.textContent = 'Editar Mesa';
-        saleModalSubtitle.textContent = 'Agrega productos, ajusta cantidades y cobra cuando la mesa esté lista.';
-        salePrimaryAction.innerHTML = '<i class="ph ph-floppy-disk"></i> Guardar Mesa';
-        saleCloseTableBtn.style.display = 'flex';
-        const table = openTables.find(item => item.id === activeSaleContext.tableId);
-        saleTableBanner.style.display = 'block';
-        saleTableBanner.innerHTML = `<strong>${table?.name || 'Mesa abierta'}</strong> · ${branch?.name || 'Sucursal'} · ${saleDraft.items.reduce((sum, item) => sum + item.qty, 0)} productos`;
-    } else if (isEditMode) {
-        saleModalTitle.textContent = 'Editar Venta';
-        saleModalSubtitle.textContent = 'Modifica los productos, cantidades o sucursal de esta venta.';
-        salePrimaryAction.innerHTML = '<i class="ph ph-check-circle"></i> Actualizar Venta';
-        saleCloseTableBtn.style.display = 'none';
-        saleTableBanner.style.display = 'none';
-    } else {
-        saleModalTitle.textContent = 'Registrar Venta';
-        saleModalSubtitle.textContent = 'Selecciona sucursal y arma el pedido.';
-        salePrimaryAction.innerHTML = `<i class="ph ${branch?.useTables ? 'ph-table' : 'ph-check-circle'}"></i> ${branch?.useTables ? 'Crear Mesa' : 'Guardar Venta'}`;
-        saleCloseTableBtn.style.display = 'none';
-        saleTableBanner.style.display = branch?.useTables ? 'block' : 'none';
-        saleTableBanner.textContent = branch?.useTables
-            ? 'Esta sucursal usa mesas. Al continuar se abrirá una nueva mesa para editar y cobrar después.'
-            : '';
-    }
-}
-
-function handleSaleBranchChange() {
-    saleDraft.branchId = saleBranchSelect.value || customBranches[0]?.id || '';
-    saveLocalState(STORAGE_KEYS.lastBranch, saleDraft.branchId);
-    renderSaleProducts();
-    renderSaleSummary();
-    updateSaleModalMeta();
-    setSaleMobilePanel('menu');
-}
-
-function getProductsForBranch(branchId) {
-    return customProducts.filter(product => productAvailableInBranch(product, branchId));
-}
-
-function renderSaleProducts() {
-    if (!saleProductsGrid) return;
-
-    const branchId = saleBranchSelect.value || saleDraft.branchId || customBranches[0]?.id || '';
-    saleDraft.branchId = branchId;
-    const products = getProductsForBranch(branchId);
-
-    if (products.length === 0) {
-        saleProductsGrid.innerHTML = `<div class="card" style="grid-column:1/-1; text-align:center; color:var(--text-muted);">No hay productos disponibles para esta sucursal.</div>`;
-        return;
-    }
-
-    saleProductsGrid.innerHTML = products.map(product => {
-        const hasModifiers = Array.isArray(product.modifiers) && product.modifiers.length > 0;
-        const matchingItems = saleDraft.items.filter(item => item.productId === product.id);
-        const totalQty = matchingItems.reduce((sum, item) => sum + item.qty, 0);
-
-        return `
-            <article class="sale-product-card">
-                <div class="category">${product.category}</div>
-                <h4>${product.name}</h4>
-                <div class="price">${formatMoney(product.price)}</div>
-                ${hasModifiers ? `<span class="product-mod-badge"><i class="ph ph-sliders"></i> Opciones (${product.modifiers.length})</span>` : ''}
-                
-                ${hasModifiers ? `
-                    ${totalQty > 0 ? `
-                        <div style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: auto;">
-                            <span style="font-size: 0.8rem; color: var(--text-muted); text-align: center;">${totalQty} en pedido</span>
-                            <button type="button" class="submit-btn" data-product-id="${product.id}" data-action="customize" style="margin-top: 0; padding: 0.6rem 0.75rem; font-size: 0.85rem;">
-                                <i class="ph ph-plus"></i> Agregar otra
-                            </button>
-                        </div>
-                    ` : `
-                        <button type="button" class="submit-btn" data-product-id="${product.id}" data-action="customize" style="margin-top: auto;">
-                            <i class="ph ph-sliders"></i> Opciones
-                        </button>
-                    `}
-                ` : `
-                    ${totalQty > 0 ? `
-                        <div class="sale-product-controls" style="margin-top: auto;">
-                            <button type="button" class="qty-btn" data-product-id="${product.id}" data-action="decrease">-</button>
-                            <span class="qty-num">${totalQty}</span>
-                            <button type="button" class="qty-btn" data-product-id="${product.id}" data-action="increase">+</button>
-                        </div>
-                    ` : `
-                        <button type="button" class="submit-btn" data-product-id="${product.id}" data-action="add" style="margin-top: auto;">
-                            <i class="ph ph-plus"></i> Agregar
-                        </button>
-                    `}
-                `}
-            </article>
-        `;
-    }).join('');
-}
-
-function renderSaleSummary() {
-    if (!saleOrderItems) return;
-
-    const totalItems = saleDraft.items.reduce((sum, item) => sum + item.qty, 0);
-    saleItemsCount.textContent = `${totalItems} producto${totalItems === 1 ? '' : 's'}`;
-    saleTotalDisplay.textContent = formatMoney(saleDraft.total);
-    saleTotalInput.value = saleDraft.total > 0 ? String(saleDraft.total) : '';
-
-    if (saleDraft.items.length === 0) {
-        saleOrderItems.innerHTML = `<div class="card" style="padding: 1rem; text-align:center; color:var(--text-muted);">Todavía no agregas productos.</div>`;
-        updateSaleModalMeta();
-        updateMobileSaleSummary();
-        return;
-    }
-
-    saleOrderItems.innerHTML = saleDraft.items.map(item => `
-        <div class="sale-order-row">
-            <div>
-                <h4>${item.name}</h4>
-                ${item.modifierText ? `<div class="sale-order-modifiers"><i class="ph ph-sliders"></i> ${escapeHtml(item.modifierText)}</div>` : ''}
-                <div class="sale-order-meta">${formatMoney(item.price)} c/u · ${formatMoney(item.price * item.qty)}</div>
-            </div>
-            <div class="sale-order-controls">
-                <button type="button" data-sale-action="decrease" data-id="${item.id || item.productId}">-</button>
-                <span>${item.qty}</span>
-                <button type="button" data-sale-action="increase" data-id="${item.id || item.productId}">+</button>
-                <button type="button" class="delete" data-sale-action="remove" data-id="${item.id || item.productId}"><i class="ph ph-trash"></i></button>
-            </div>
-        </div>
-    `).join('');
-
-    updateSaleModalMeta();
-    updateMobileSaleSummary();
-}
-
-function updateMobileSaleSummary() {
-    if (!mobileSaleSummary) return;
-
-    if (saleDraft.items.length === 0) {
-        mobileSaleSummary.style.display = 'none';
-        return;
-    }
-
-    const totalItems = saleDraft.items.reduce((sum, item) => sum + item.qty, 0);
-    const isMenuPanel = !saleLayout.classList.contains('show-order');
-
-    if (isMenuPanel) {
-        mobileSaleSummary.style.display = 'flex';
-        mobileSaleSummary.innerHTML = `
-            <div class="mobile-summary-info">
-                <span class="mobile-summary-total">${formatMoney(saleDraft.total)}</span>
-                <span class="mobile-summary-count">${totalItems} items en pedido</span>
-            </div>
-            <button type="button" class="mobile-summary-btn">
-                Ver Pedido <i class="ph ph-arrow-right"></i>
-            </button>
-        `;
-    } else {
-        mobileSaleSummary.style.display = 'none';
-    }
-}
-
-function syncSaleDraftTotal() {
-    saleDraft.total = getItemsTotal(saleDraft.items);
-}
-
-function persistActiveSaleDraft() {
-    if (activeSaleContext.mode !== 'table' || !activeSaleContext.tableId) return;
-    updateTable(activeSaleContext.tableId, {
-        branchId: saleDraft.branchId,
-        items: saleDraft.items,
-        total: saleDraft.total
-    });
-}
-
-function openModifiersModal(productId) {
-    const product = customProducts.find(p => p.id === productId);
-    if (!product) return;
-
-    currentModProduct = product;
-    currentModQty = 1;
-
-    if (modModalProdName) modModalProdName.textContent = `Personalizar ${product.name}`;
-    if (modModalProdPrice) modModalProdPrice.textContent = formatMoney(product.price);
-    if (modQtyVal) modQtyVal.textContent = '1';
-
-    if (!modModalBody) return;
-    modModalBody.innerHTML = '';
-
-    const groups = Array.isArray(product.modifiers) ? product.modifiers : [];
-    if (groups.length === 0) {
-        addItemToCurrentSale(productId);
-        return;
-    }
-
-    groups.forEach((group, gIdx) => {
-        const groupSec = document.createElement('div');
-        groupSec.className = 'mod-group-section';
-        const isSingle = group.type === 'single';
-
-        groupSec.innerHTML = `
-            <div class="mod-group-header">
-                <span class="mod-group-title">${escapeHtml(group.name)}</span>
-                <span class="mod-group-tag">${isSingle ? 'Elige 1 opción' : 'Elige una o más opciones'}</span>
-            </div>
-            <div class="mod-options-container">
-                ${group.options.map((opt, oIdx) => `
-                    <label class="mod-option-row">
-                        <input type="${isSingle ? 'radio' : 'checkbox'}" 
-                               name="mod_group_${group.id || gIdx}" 
-                               value="${opt.id || oIdx}" 
-                               data-group-id="${group.id || gIdx}"
-                               data-group-name="${escapeHtml(group.name)}"
-                               data-opt-id="${opt.id || oIdx}"
-                               data-opt-name="${escapeHtml(opt.name)}"
-                               data-opt-price="${opt.price || 0}"
-                               ${isSingle && oIdx === 0 ? 'checked' : ''}>
-                        <div class="mod-option-info">
-                            <span class="mod-opt-name">${escapeHtml(opt.name)}</span>
-                            ${opt.price > 0 ? `<span class="mod-opt-extra">+${formatMoney(opt.price)}</span>` : ''}
-                        </div>
-                    </label>
-                `).join('')}
-            </div>
-        `;
-        modModalBody.appendChild(groupSec);
-    });
-
-    updateModifiersModalTotal();
-    if (modifiersModal) modifiersModal.classList.add('open');
-}
-
-function closeModifiersModal() {
-    if (modifiersModal) modifiersModal.classList.remove('open');
-    currentModProduct = null;
-    currentModQty = 1;
-}
-
-function updateModifiersModalTotal() {
-    if (!currentModProduct || !modModalBody || !modModalTotal) return;
-
-    let extraSum = 0;
-    const checkedInputs = modModalBody.querySelectorAll('input:checked');
-    checkedInputs.forEach(input => {
-        extraSum += (Number(input.dataset.optPrice) || 0);
-    });
-
-    const unitPrice = (Number(currentModProduct.price) || 0) + extraSum;
-    const total = unitPrice * currentModQty;
-    modModalTotal.textContent = formatMoney(total);
-}
-
-function confirmAddProductWithModifiers() {
-    if (!currentModProduct || !modModalBody) return;
-
-    const groups = Array.isArray(currentModProduct.modifiers) ? currentModProduct.modifiers : [];
-    const selectedModifiers = [];
-
-    for (let gIdx = 0; gIdx < groups.length; gIdx++) {
-        const group = groups[gIdx];
-        const isSingle = group.type === 'single';
-        const checked = modModalBody.querySelectorAll(`input[name="mod_group_${group.id || gIdx}"]:checked`);
-        
-        if (isSingle && checked.length === 0 && group.options.length > 0) {
-            showToast(`Selecciona una opción para "${group.name}"`);
-            return;
-        }
-
-        checked.forEach(input => {
-            selectedModifiers.push({
-                groupName: input.dataset.groupName,
-                optionName: input.dataset.optName,
-                price: Number(input.dataset.optPrice) || 0
-            });
-        });
-    }
-
-    const modifierText = selectedModifiers.map(m => m.optionName).join(', ');
-
-    addItemToCurrentSale(currentModProduct.id, {
-        qty: currentModQty,
-        selectedModifiers,
-        modifierText
-    });
-
-    closeModifiersModal();
-}
-
-function addItemToCurrentSale(productId, options = {}) {
-    const product = customProducts.find(item => item.id === productId);
-    if (!product) return;
-
-    const qty = Number(options.qty) || 1;
-    const selectedModifiers = Array.isArray(options.selectedModifiers) ? options.selectedModifiers : [];
-    const modifierText = options.modifierText || '';
-    const modSignature = options.modSignature || selectedModifiers.map(m => `${m.groupName}:${m.optionName}`).sort().join('|');
-    const extraPrice = selectedModifiers.reduce((sum, m) => sum + (Number(m.price) || 0), 0);
-    const unitPrice = (Number(product.price) || 0) + extraPrice;
-
-    // Check if item with same productId and exact modifier configuration exists
-    const existing = saleDraft.items.find(item => 
-        item.productId === productId && 
-        ((item.modSignature && item.modSignature === modSignature) || 
-         (!item.modSignature && !modSignature && (item.modifierText || '') === modifierText))
-    );
-
-    if (existing) {
-        existing.qty += qty;
-    } else {
-        saleDraft.items.push({
-            id: `item_${product.id}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            productId: product.id,
-            name: product.name,
-            basePrice: product.price,
-            price: unitPrice,
-            qty: qty,
-            selectedModifiers,
-            modifierText,
-            modSignature
-        });
-    }
-
-    syncSaleDraftTotal();
-    persistActiveSaleDraft();
-    renderSaleSummary();
-    renderSaleProducts();
-    if (isStackedSaleLayout()) scrollSaleModalToTop();
-    showToast(`+${qty} ${product.name}${modifierText ? ` (${modifierText})` : ''}`);
-}
-
-function updateCurrentSaleItemQty(itemIdOrProductId, delta) {
-    let targetIndex = saleDraft.items.findIndex(item => item.id === itemIdOrProductId);
-    
-    if (targetIndex === -1) {
-        if (delta < 0) {
-            for (let i = saleDraft.items.length - 1; i >= 0; i--) {
-                if (saleDraft.items[i].productId === itemIdOrProductId) {
-                    targetIndex = i;
-                    break;
-                }
-            }
-        } else {
-            targetIndex = saleDraft.items.findIndex(item => item.productId === itemIdOrProductId);
-        }
-    }
-
-    if (targetIndex === -1) return;
-
-    saleDraft.items[targetIndex].qty += delta;
-    if (saleDraft.items[targetIndex].qty <= 0) {
-        saleDraft.items.splice(targetIndex, 1);
-    }
-
-    syncSaleDraftTotal();
-    persistActiveSaleDraft();
-    renderSaleSummary();
-    renderSaleProducts();
-    if (isStackedSaleLayout()) scrollSaleModalToTop();
-}
-
-function removeItemFromCurrentSale(itemIdOrProductId) {
-    let targetIndex = saleDraft.items.findIndex(item => item.id === itemIdOrProductId);
-    if (targetIndex === -1) {
-        targetIndex = saleDraft.items.findIndex(item => item.productId === itemIdOrProductId);
-    }
-
-    if (targetIndex !== -1) {
-        saleDraft.items.splice(targetIndex, 1);
-    } else {
-        saleDraft.items = saleDraft.items.filter(item => item.productId !== itemIdOrProductId);
-    }
-
-    syncSaleDraftTotal();
-    persistActiveSaleDraft();
-    renderSaleSummary();
-    renderSaleProducts();
-    if (isStackedSaleLayout()) scrollSaleModalToTop();
-}
-
-function handleSaleTotalInput() {
-    const manualTotal = parseFloat(saleTotalInput.value);
-    saleDraft.total = !isNaN(manualTotal) && manualTotal >= 0 ? manualTotal : getItemsTotal(saleDraft.items);
-    persistActiveSaleDraft();
-    renderSaleSummary();
-    if (isStackedSaleLayout()) scrollSaleModalToTop('auto');
-}
-
-function buildIncomeTransaction({ branchId, items, total, source = 'sale', date = new Date(), tableName = '' }) {
-    const branch = getBranchById(branchId);
-    const desc = items.length > 0
-        ? items.map(item => `${item.qty}x ${item.name}${item.modifierText ? ` (${item.modifierText})` : ''}`).join(', ')
-        : 'Venta General';
-
-    return {
-        type: 'income',
-        amount: Number(total) || 0,
-        desc,
-        category: 'Venta',
-        branch: branchId || '',
-        zone: branch?.name || '',
-        branchId: branchId || '',
-        tableName: tableName || '',
-        itemsSoldArray: items.map(item => ({
-            productId: item.productId,
-            name: item.modifierText ? `${item.name} (${item.modifierText})` : item.name,
-            rawName: item.name,
-            qty: Number(item.qty) || 0,
-            price: Number(item.price) || 0,
-            total: (Number(item.price) || 0) * (Number(item.qty) || 0),
-            modifiers: item.selectedModifiers || [],
-            modifierText: item.modifierText || '',
-            category: customProducts.find(product => product.id === item.productId)?.category || ''
-        })),
-        products: items.map(item => ({ ...item })),
-        source,
-        date: date.toISOString(),
-        createdAt: new Date().toISOString()
-    };
-}
-
-async function saveTransactionRecord(newTx, successMessage = 'Registro guardado con éxito') {
-    if (!db) {
-        showToast("Firebase No Configurado");
-        return false;
-    }
-    // Fire and forget: no await
-    addDoc(collection(db, "transactions"), newTx).catch(err => console.error("Error guardando Firebase:", err));
-    showToast(successMessage);
-    return true;
-}
-
-async function handleSalePrimaryAction() {
-    const branchId = saleBranchSelect.value || saleDraft.branchId || customBranches[0]?.id || '';
-    const branch = getBranchById(branchId);
-
-    if (!branch) {
-        showToast("Selecciona una sucursal");
-        return;
-    }
-
-    saleDraft.branchId = branchId;
-
-    if (activeSaleContext.mode === 'edit-transaction' && activeSaleContext.transactionId) {
-        const transactionId = activeSaleContext.transactionId;
-        const orig = activeSaleContext.originalTransaction || {};
-
-        if (saleDraft.total <= 0) {
-            showToast("Agrega productos o un total válido");
-            return;
-        }
-
-        const updatedTx = buildIncomeTransaction({
-            branchId,
-            items: saleDraft.items,
-            total: saleDraft.total,
-            source: orig.source || 'sale',
-            date: createLocalDateFromInput(saleDateInput?.value),
-            tableName: orig.tableName || ''
-        });
-
-        if (db) {
-            if (typeof transactionId === 'string' && !transactionId.startsWith('temp_')) {
-                updateDoc(doc(db, "transactions", transactionId), updatedTx).catch(err => console.error("Error actualizando venta:", err));
-            }
-        }
-
-        transactions = transactions.map(t => t.id === transactionId ? { ...updatedTx, id: transactionId } : t);
-        saveLocalState(STORAGE_KEYS.transactions, transactions);
-        updateDashboard();
-        if (views.transactions.classList.contains('active-view')) {
-            renderFullHistory();
-        }
-
-        showToast("Venta actualizada con éxito");
-        closeSaleModal();
-        return;
-    }
-
-    if (branch.useTables && activeSaleContext.mode !== 'table') {
-        const table = createTable(branchId, saleDraft.items, saleDraft.total);
-        saleDraft = createEmptySaleDraft({
-            branchId,
-            items: table.items,
-            total: table.total
-        });
-        activeSaleContext = { mode: 'table', tableId: table.id };
-        showToast(`${table.name} creada`);
-        closeSaleModal();
-        switchView('tables');
-        return;
-    }
-
-    if (saleDraft.total <= 0) {
-        showToast("Agrega productos o un total válido");
-        return;
-    }
-
-    if (activeSaleContext.mode === 'table' && activeSaleContext.tableId) {
-        updateTable(activeSaleContext.tableId, {
-            branchId,
-            items: saleDraft.items,
-            total: saleDraft.total
-        });
-        showToast("Mesa actualizada");
-        closeSaleModal();
-        switchView('tables');
-        return;
-    }
-
-    const newTx = buildIncomeTransaction({
-        branchId,
-        items: saleDraft.items,
-        total: saleDraft.total,
-        source: 'sale',
-        date: createLocalDateFromInput(saleDateInput?.value)
-    });
-    await saveTransactionRecord(newTx, 'Venta guardada con éxito');
-    closeSaleModal();
-}
-
-async function handleCloseActiveTable() {
-    if (!activeSaleContext.tableId) return;
-    await closeTable(activeSaleContext.tableId, createLocalDateFromInput(saleDateInput?.value));
-}
-
-function getOpenTables(branchId = '') {
-    return openTables.filter(table => table.status === 'open' && (!branchId || table.branchId === branchId));
-}
-
-function saveOpenTablesState() {
-    openTables = normalizeOpenTables(openTables);
-    saveLocalState(STORAGE_KEYS.openTables, openTables);
-    renderTablesView();
-}
-
-function getTodayTablesCount(branchId = '') {
-    const openCount = openTables.filter(t => t.status === 'open' && isSameLocalDate(t.createdAt) && (!branchId || t.branchId === branchId)).length;
-    const closedCount = transactions.filter(t => t.source === 'table' && isSameLocalDate(t.date || t.createdAt) && (!branchId || t.branchId === branchId || t.branch === branchId)).length;
-
-    return { open: openCount, closed: closedCount, total: openCount + closedCount };
-}
-
-function getNextTableName(branchId) {
-    const openNums = openTables
-        .filter(table => table.status === 'open' && isSameLocalDate(table.createdAt) && (!branchId || table.branchId === branchId))
-        .map(table => {
-            const match = String(table.name || '').match(/Mesa\s+(\d+)/i);
-            return match ? Number(match[1]) : 0;
-        });
-
-    const closedNums = transactions
-        .filter(t => t.source === 'table' && isSameLocalDate(t.date || t.createdAt) && (!branchId || t.branchId === branchId || t.branch === branchId))
-        .map(t => {
-            const match = String(t.tableName || t.desc || '').match(/Mesa\s+(\d+)/i);
-            return match ? Number(match[1]) : 0;
-        });
-
-    const maxNumber = Math.max(0, ...openNums, ...closedNums);
-    return `Mesa ${maxNumber + 1}`;
-}
-
-function createTable(branchId, initialItems = [], initialTotal = 0) {
-    return saveTable({
-        id: `table_${Date.now()}`,
-        branchId,
-        name: getNextTableName(branchId),
-        items: initialItems,
-        total: initialTotal,
-        status: 'open',
-        createdAt: new Date().toISOString()
-    });
-}
-
-function saveTable(table) {
-    const normalized = normalizeTable(table);
-    
-    if (db) {
-        setDoc(doc(db, "dashboard_tables", normalized.id), normalized).catch(e => {
-            console.warn("Fallo Firebase al guardar mesa, respaldando en LocalStorage", e);
-        });
-    }
-
-    const exists = openTables.some(item => item.id === normalized.id);
-    openTables = exists
-        ? openTables.map(item => item.id === normalized.id ? normalized : item)
-        : [...openTables, normalized];
-    saveOpenTablesState();
-    return normalized;
-}
-
-function updateTable(tableId, patch) {
-    const current = openTables.find(item => item.id === tableId);
-    if (!current) return null;
-
-    const nextTable = normalizeTable({
-        ...current,
-        ...(typeof patch === 'function' ? patch(current) : patch)
-    });
-    return saveTable(nextTable);
-}
-
-function deleteTable(tableId) {
-    if (db) {
-        deleteDoc(doc(db, "dashboard_tables", tableId)).catch(e => {
-            console.warn("Fallo Firebase al eliminar mesa, respaldando en LocalStorage", e);
-        });
-    }
-    openTables = openTables.filter(item => item.id !== tableId);
-    saveOpenTablesState();
-}
-
-function promptDeleteTable(id) {
-    if (confirm("¿Estás seguro de que quieres eliminar esta mesa completa? Se perderá el pedido actual.")) {
-        deleteTable(id);
-        showToast("Mesa eliminada");
-    }
-}
-
-function addItemToTable(tableId, productId) {
-    const table = openTables.find(item => item.id === tableId);
-    if (!table) return null;
-    const product = customProducts.find(item => item.id === productId);
-    if (!product) return table;
-
-    const items = [...table.items];
-    const existing = items.find(item => item.productId === productId);
-
-    if (existing) existing.qty += 1;
-    else items.push({ productId, name: product.name, price: product.price, qty: 1 });
-
-    return updateTable(tableId, { items, total: getItemsTotal(items) });
-}
-
-function removeItemFromTable(tableId, productId) {
-    const table = openTables.find(item => item.id === tableId);
-    if (!table) return null;
-    const items = table.items.filter(item => item.productId !== productId);
-    return updateTable(tableId, { items, total: getItemsTotal(items) });
-}
-
-function updateItemQty(tableId, productId, delta) {
-    const table = openTables.find(item => item.id === tableId);
-    if (!table) return null;
-    const items = table.items
-        .map(item => item.productId === productId ? { ...item, qty: item.qty + delta } : item)
-        .filter(item => item.qty > 0);
-    return updateTable(tableId, { items, total: getItemsTotal(items) });
-}
-
-function openTableEditor(tableId) {
-    const table = openTables.find(item => item.id === tableId);
-    if (!table) return;
-
-    activeSaleContext = { mode: 'table', tableId };
-    saleDraft = createEmptySaleDraft({
-        branchId: table.branchId,
-        items: table.items.map(item => ({ ...item })),
-        total: Number(table.total) || getItemsTotal(table.items)
-    });
-    if (saleDateInput) saleDateInput.value = getLocalDateInputValue();
-    renderSaleBranchOptions();
-    saleBranchSelect.value = table.branchId;
-    saleDraft.branchId = table.branchId;
-    renderSaleProducts();
-    renderSaleSummary();
-    updateSaleModalMeta();
-    setSaleMobilePanel('menu');
-    saleModal.classList.add('open');
-    scrollToTop();
-}
-
-function renderTablesView() {
-    const branchId = tablesBranchFilter?.value || '';
-
-    const summaryBadge = document.getElementById('tables-today-summary-badge');
-    if (summaryBadge) {
-        const counts = getTodayTablesCount(branchId);
-        summaryBadge.innerHTML = `<i class="ph ph-table"></i> Mesas hoy: ${counts.total} (${counts.open} abiertas, ${counts.closed} cobradas)`;
-    }
-
-    if (!tablesGrid) return;
-    const filteredTables = getOpenTables(branchId);
-
-    if (filteredTables.length === 0) {
-        tablesGrid.innerHTML = `<div class="card" style="grid-column:1/-1; text-align:center; color:var(--text-muted);">No hay mesas abiertas${branchId ? ' en esta sucursal' : ''}.</div>`;
-        return;
-    }
-
-    tablesGrid.innerHTML = filteredTables.map(table => `
-        <article class="table-card">
-            <div class="table-card-top">
-                <div>
-                    <div class="table-card-title">${table.name}</div>
-                    <div class="table-card-subtitle">${getBranchNameById(table.branchId)} · ${table.items.reduce((sum, item) => sum + item.qty, 0)} productos</div>
-                </div>
-                <div class="table-card-total">${formatMoney(table.total)}</div>
-            </div>
-            <div class="table-card-preview">
-                ${table.items.length > 0
-                    ? table.items
-                        .slice(0, 4)
-                        .map(item => `<span class="table-card-chip" title="${item.modifierText ? `${item.name} (${item.modifierText})` : item.name}">${item.qty}x ${item.name}${item.modifierText ? ` <small style="color:var(--primary); font-size:0.75rem;">(${item.modifierText})</small>` : ''}</span>`)
-                        .join('')
-                    : '<span class="table-card-chip empty">Sin productos</span>'}
-            </div>
-            <div class="table-card-actions">
-                <button type="button" class="submit-btn" data-table-action="edit" data-id="${table.id}"><i class="ph ph-pencil-simple"></i> Editar</button>
-                <button type="button" class="submit-btn" style="background: var(--success);" data-table-action="charge" data-id="${table.id}"><i class="ph ph-currency-circle-dollar"></i> Cobrar</button>
-                <button type="button" class="submit-btn" style="background: var(--danger);" data-table-action="delete" data-id="${table.id}"><i class="ph ph-trash"></i> Eliminar</button>
-            </div>
-        </article>
-    `).join('');
-}
-
-async function closeTable(tableId, date = new Date()) {
-    const table = openTables.find(item => item.id === tableId);
-    if (!table) return;
-
-    if ((Number(table.total) || 0) <= 0) {
-        showToast("La mesa no tiene total para cobrar");
-        return;
-    }
-
-    const transaction = buildIncomeTransaction({
-        branchId: table.branchId,
-        items: table.items,
-        total: table.total,
-        source: 'table',
-        date,
-        tableName: table.name || ''
-    });
-
-    await saveTransactionRecord(transaction, `${table.name} cobrada con éxito`);
-    deleteTable(tableId);
-
-    if (activeSaleContext.tableId === tableId) {
-        closeSaleModal();
-    }
-}
-
-function renderExpenseTags() {
-    if (!expenseTagsContainer) return;
-
-    expenseTagsContainer.innerHTML = '';
-    customExpenseTags.forEach(tag => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = `expense-tag${selectedExpenseShortcuts.includes(tag.name) ? ' active' : ''}`;
-        btn.textContent = tag.name;
-        btn.addEventListener('click', () => toggleExpenseShortcut(tag.name));
-        expenseTagsContainer.appendChild(btn);
-    });
-}
-
-function getSelectedExpenseRows() {
-    const inputs = Array.from(selectedExpensesContainer?.querySelectorAll('.selected-expense-amount') || []);
-    return selectedExpenseShortcuts.map(name => {
-        const input = inputs.find(item => item.dataset.expenseName === name);
-        return {
-            name,
-            amount: parseFloat(input?.value) || 0
-        };
-    });
-}
-
-function updateSelectedExpensesTotal() {
-    if (!totalSalesAmount) return;
-
-    if (selectedExpenseShortcuts.length === 0) {
-        totalSalesAmount.readOnly = false;
-        return;
-    }
-
-    const total = getSelectedExpenseRows().reduce((sum, item) => sum + item.amount, 0);
-    totalSalesAmount.value = total > 0 ? total : '';
-    totalSalesAmount.readOnly = true;
-}
-
-function renderSelectedExpenses() {
-    if (!selectedExpensesContainer) return;
-    const previousRows = getSelectedExpenseRows();
-    const previousAmounts = new Map(previousRows.map(item => [item.name, item.amount]));
-
-    if (selectedExpenseShortcuts.length === 0) {
-        selectedExpensesContainer.style.display = 'none';
-        selectedExpensesContainer.innerHTML = '';
-        updateSelectedExpensesTotal();
-        return;
-    }
-
-    selectedExpensesContainer.style.display = 'grid';
-    selectedExpensesContainer.innerHTML = '';
-
-    selectedExpenseShortcuts.forEach(name => {
-        const row = document.createElement('div');
-        row.className = 'selected-expense-row';
-
-        const label = document.createElement('div');
-        label.className = 'selected-expense-name';
-        label.textContent = name;
-
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.className = 'selected-expense-amount';
-        input.dataset.expenseName = name;
-        input.min = '0';
-        input.step = '0.5';
-        input.placeholder = 'Costo';
-        input.required = true;
-        const previousAmount = previousAmounts.get(name);
-        if (previousAmount > 0) input.value = String(previousAmount);
-
-        row.append(label, input);
-        selectedExpensesContainer.appendChild(row);
-    });
-
-    selectedExpensesContainer.querySelectorAll('.selected-expense-amount').forEach(input => {
-        input.addEventListener('input', updateSelectedExpensesTotal);
-    });
-    updateSelectedExpensesTotal();
-}
-
-function toggleExpenseShortcut(name) {
-    if (editingTransactionId) {
-        showToast("En edición usa la descripción y el monto del registro actual");
-        return;
-    }
-
-    const exists = selectedExpenseShortcuts.includes(name);
-    selectedExpenseShortcuts = exists
-        ? selectedExpenseShortcuts.filter(item => item !== name)
-        : [...selectedExpenseShortcuts, name];
-
-    renderExpenseTags();
-    renderSelectedExpenses();
-}
-
-function resetSelectedExpenses() {
-    selectedExpenseShortcuts = [];
-    renderExpenseTags();
-    renderSelectedExpenses();
-    if (totalSalesAmount) totalSalesAmount.readOnly = false;
-}
-
-function setupDateStr() {
-    const today = new Date();
-    const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-    const dateDisplay = document.getElementById('current-date-display');
-    if (dateDisplay) {
-        dateDisplay.textContent = today.toLocaleDateString('es-ES', options);
-    }
-}
-
-// Expense Form Submission
-async function handleFormSubmit(e) {
-    e.preventDefault();
-    const amount = parseFloat(totalSalesAmount.value) || 0;
-    const dateVal = document.getElementById('date').value;
-    const dateObj = createLocalDateFromInput(dateVal);
-
-    const selectedExpenses = getSelectedExpenseRows();
-    if (selectedExpenses.length > 0 && !editingTransactionId) {
-        const invalidExpense = selectedExpenses.find(item => item.amount <= 0);
-        if (invalidExpense) {
-            showToast(`Agrega el costo de ${invalidExpense.name}`);
-            return;
-        }
-
-        if (!db) {
-            showToast("Firebase No Configurado");
-            return;
-        }
-
-        selectedExpenses.forEach(item => {
-            const expenseTx = {
-                type: 'expense',
-                amount: item.amount,
-                desc: item.name,
-                category: 'Gastos (General)',
-                zone: '',
-                itemsSoldArray: [],
-                date: dateObj.toISOString(),
-                createdAt: new Date().toISOString()
-            };
-            addDoc(collection(db, "transactions"), expenseTx).catch(err => console.error("Error agregando gasto:", err));
-        });
-
-        showToast(`${selectedExpenses.length} gastos guardados con éxito`);
-        closeModal();
-        return;
-    }
-
-    const desc = document.getElementById('description').value.trim() || "Gasto sin descripción";
-    if (amount <= 0) {
-        showToast("Ingresa un monto válido para el gasto");
-        return;
-    }
-
-    const expenseTx = {
-        type: 'expense',
-        amount,
-        desc,
-        category: 'Gastos (General)',
-        zone: '',
-        itemsSoldArray: [],
-        date: dateObj.toISOString(),
-        createdAt: new Date().toISOString()
-    };
-
-    if (!db) {
-        showToast("Firebase No Configurado");
-        return;
-    }
-    if (editingTransactionId && !editingTransactionId.startsWith('temp_')) {
-        updateDoc(doc(db, "transactions", editingTransactionId), expenseTx).catch(err => console.error("Error actualizando gasto:", err));
-        transactions = transactions.map(t => t.id === editingTransactionId ? { ...expenseTx, id: editingTransactionId } : t);
-        saveLocalState(STORAGE_KEYS.transactions, transactions);
-        updateDashboard();
-        if (views.transactions.classList.contains('active-view')) renderFullHistory();
-        showToast("Gasto actualizado con éxito");
-    } else {
-        addDoc(collection(db, "transactions"), expenseTx).catch(err => console.error("Error agregando gasto:", err));
-        showToast("Gasto guardado con éxito");
-    }
-    closeModal();
-}
-
-function syncStrandedOfflineTransactions() {
-    if (!db) return;
-    const tempTxs = transactions.filter(t => typeof t.id === 'string' && t.id.startsWith('temp_'));
-    if (tempTxs.length > 0) {
-        console.log(`Sincronizando ${tempTxs.length} transacciones varadas localmente a Firebase...`);
-        tempTxs.forEach(tx => {
-            const { id, ...txData } = tx;
-            addDoc(collection(db, "transactions"), txData).catch(e => console.warn("Background sync error:", e));
-        });
-        transactions = transactions.filter(t => !(typeof t.id === 'string' && t.id.startsWith('temp_')));
-    }
-}
-
-function fetchTransactions() {
-    if (!db) return;
-    const q = query(collection(db, "transactions"), orderBy("date", "desc"));
-
-    onSnapshot(q, (snapshot) => {
-        if (!snapshot.empty) {
-            transactions = [];
-            snapshot.forEach((doc) => {
-                transactions.push({ ...doc.data(), id: doc.id });
-            });
-            saveLocalState(STORAGE_KEYS.transactions, transactions);
-            updateDashboard();
-            if (views.transactions.classList.contains('active-view')) renderFullHistory();
-        }
-    }, (error) => {
-        console.warn("⚠️ No se pudo leer Firebase, usando datos locales:", error);
-    });
-}
-
-window.deleteTransaction = async (id) => {
-    if (confirm("¿Estás seguro de eliminar este registro?")) {
-        if (!db) return;
-        if (id.startsWith('temp_')) {
-            transactions = transactions.filter(t => t.id !== id);
-            saveLocalState(STORAGE_KEYS.transactions, transactions);
-            updateDashboard();
-            renderFullHistory();
-        } else {
-            deleteDoc(doc(db, "transactions", id)).catch(e => console.error("Error eliminando:", e));
-        }
-    }
-};
-
-window.editTransaction = (id) => {
-    const transaction = transactions.find(item => item.id === id);
-    if (!transaction) return;
-    if (transaction.type === 'income') {
-        openSaleEditor(transaction);
-    } else {
-        openExpenseModal(transaction);
-    }
-};
-
-// Data Processing & Rendering
-function getFilteredData() {
+// Data Filtering & Calculations
+export function getFilteredData() {
     const now = new Date();
+    const transactions = getTransactions();
 
     return transactions.filter(t => {
         try {
@@ -3536,21 +159,17 @@ function getFilteredData() {
             if (isNaN(tDate.getTime())) return false;
 
             if (mainTypeFilter !== 'all' && t.type !== mainTypeFilter) return false;
-
             if (currentFilter === 'all') return true;
 
             if (currentFilter === 'custom') {
-                if (!customStartDate || !customEndDate) return true; // If custom is selected but dates aren't set, show all.
-
-                // Make inclusive boundary spanning entire visual days
+                if (!customStartDate || !customEndDate) return true;
                 const startDate = new Date(customStartDate.getFullYear(), customStartDate.getMonth(), customStartDate.getDate());
                 const endDate = new Date(customEndDate.getFullYear(), customEndDate.getMonth(), customEndDate.getDate(), 23, 59, 59);
-                customDateLabel = 'del ' + startDate.toLocaleDateString('es-ES') + ' al ' + endDate.toLocaleDateString('es-ES');
                 return tDate >= startDate && tDate <= endDate;
             }
 
             if (currentFilter === 'day') {
-                return tDate.getFullYear() === now.getFullYear() && tDate.getMonth() === now.getMonth() && tDate.getDate() === now.getDate();
+                return isSameLocalDate(tDate, now);
             }
             if (currentFilter === 'week') {
                 const dayOfWeek = now.getDay() || 7;
@@ -3564,529 +183,562 @@ function getFilteredData() {
             if (currentFilter === 'year') {
                 return tDate.getFullYear() === now.getFullYear();
             }
-            return true;
         } catch (e) {
             return false;
         }
+        return false;
     });
 }
 
-function setCollapsibleSectionState(panel, button, isVisible) {
-    if (panel) panel.classList.toggle('collapsed', !isVisible);
-    if (!button) return;
-
-    button.innerHTML = isVisible
-        ? '<i class="ph ph-eye-slash"></i> Ocultar'
-        : '<i class="ph ph-eye"></i> Mostrar';
-}
-
-function updateDashboard() {
-    const data = getFilteredData();
-
-    let ingresos = 0, gastos = 0;
-    data.forEach(t => {
-        if (t.type === 'income') ingresos += t.amount;
-        else gastos += t.amount;
-    });
-
-    summaryIncome.textContent = formatMoney(ingresos);
-    summaryExpense.textContent = formatMoney(gastos);
-    summaryProfit.textContent = formatMoney(ingresos - gastos);
-
-    setCollapsibleSectionState(recentTransactionsPanel, btnToggleRecentTransactions, recentTransactionsVisible);
-    recentTbody.innerHTML = '';
-    if (recentTransactionsVisible) {
-        const recent = [...data].sort((a, b) => {
-            const dateA = a.date ? new Date(a.date).getTime() : 0;
-            const dateB = b.date ? new Date(b.date).getTime() : 0;
-            return dateB - dateA;
-        });
-        if (recent.length === 0) {
-            recentTbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-muted)">Aún no hay transacciones</td></tr>`;
-        } else {
-            recent.forEach(t => recentTbody.appendChild(createRow(t, false)));
-        }
-    }
-
-    updateCharts(data);
-    renderTopSellers(data);
-    renderBranchSalesSummary(data);
-    renderProductsPeriodSummary(data);
-}
-
-function getItemsForTransaction(transaction) {
-    if (Array.isArray(transaction.itemsSoldArray) && transaction.itemsSoldArray.length > 0) {
-        return transaction.itemsSoldArray.map(item => ({
-            name: item.name,
-            qty: Number(item.qty) || 0,
-            total: Number(item.total) || ((Number(item.price) || 0) * (Number(item.qty) || 0))
-        }));
-    }
-
-    if (!transaction.desc || transaction.desc === 'Venta General') return [];
-
-    const normalizedDesc = transaction.desc
-        .replace(/\s+[xX]\s+/g, 'x ')
-        .replace(/[•|]/g, ',')
-        .trim();
-    const parts = normalizedDesc.split(/\s*,\s*/).filter(Boolean);
-    const parsedItems = parts
-        .map(part => {
-            const match = part.match(/^(\d+)\s*x\s+(.+)$/i);
-            if (!match) return null;
-            return {
-                qty: parseInt(match[1], 10),
-                name: match[2].trim()
-            };
-        })
-        .filter(Boolean);
-
-    if (parsedItems.length === 0) return [];
-
-    const totalQty = parsedItems.reduce((sum, item) => sum + item.qty, 0) || 1;
-
-    return parsedItems.map(item => {
-        const product = customProducts.find(prod => prod.name === item.name);
-        const fallbackUnitPrice = product ? product.price : (transaction.amount / totalQty);
-
-        return {
-            ...item,
-            total: fallbackUnitPrice * item.qty
-        };
-    });
-}
-
-function normalizeText(value) {
-    return (value || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .replace(/\s+/g, ' ')
-        .trim();
-}
-
-function toTitleCase(value) {
-    return value
-        .split(' ')
-        .filter(Boolean)
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-}
-
-function getAggregationMeta(productName) {
-    const originalName = (productName || '').trim();
-    const normalizedName = normalizeText(originalName);
-
-    const compactComboMatch = normalizedName.match(/^(\d+)\s*x\s*\$?\s*(\d+(?:\.\d+)?)\s+(.+)$/i);
-    if (compactComboMatch) {
-        const [, qty, price, rawProduct] = compactComboMatch;
-        const product = normalizeText(rawProduct);
-        return {
-            key: `combo:${product}:${qty}:${price}`,
-            label: `${qty} ${toTitleCase(product)} por $${price}`
-        };
-    }
-
-    const naturalComboMatch = normalizedName.match(/^(\d+)\s+(.+?)\s+por\s+\$?\s*(\d+(?:\.\d+)?)$/i);
-    if (naturalComboMatch) {
-        const [, qty, rawProduct, price] = naturalComboMatch;
-        const product = normalizeText(rawProduct);
-        return {
-            key: `combo:${product}:${qty}:${price}`,
-            label: `${qty} ${toTitleCase(product)} por $${price}`
-        };
-    }
-
-    return {
-        key: `name:${normalizedName}`,
-        label: originalName
+export function getFilterLabel() {
+    const labels = {
+        day: 'Hoy',
+        week: 'Esta semana',
+        month: 'Este mes',
+        year: 'Este año',
+        all: 'Todo el historial',
+        custom: customDateLabel || 'Fechas personalizadas'
     };
+    return labels[currentFilter] || 'Resumen';
 }
 
-function getTopSellerStats(data) {
-    const productStats = {};
+export function updateDashboard() {
+    const filtered = getFilteredData();
+    const customProducts = getCustomProducts();
 
-    data.forEach(t => {
-        if (t.type === 'income') {
-            const items = getItemsForTransaction(t);
-
-            if (items.length > 0) {
-                items.forEach(item => {
-                    const aggregation = getAggregationMeta(item.name);
-                    if (!productStats[aggregation.key]) {
-                        productStats[aggregation.key] = {
-                            label: aggregation.label,
-                            qty: 0,
-                            total: 0
-                        };
-                    }
-
-                    productStats[aggregation.key].qty += item.qty;
-                    productStats[aggregation.key].total += (item.total || 0);
-                });
-            }
-        }
-    });
-
-    return Object.entries(productStats)
-        .sort((a, b) => {
-            if (b[1].qty !== a[1].qty) return b[1].qty - a[1].qty;
-            return b[1].total - a[1].total;
-        });
+    updateDashboardSummaryCards(filtered);
+    renderRecentTransactions(filtered);
+    renderBranchSalesSummary(filtered);
+    renderProductsPeriodSummary(filtered, getFilterLabel(), customProducts);
+    updateCharts(filtered);
 }
 
-function getProductsPeriodStats(data) {
-    const productStats = {};
+// Global actions exposed to inline buttons
+window.deleteTransaction = async (id) => {
+    if (confirm("¿Estás seguro de eliminar este registro?")) {
+        await deleteTransactionRecord(id);
+        updateDashboard();
+        renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+        renderTablesView(getTransactions());
+        showToast("Registro eliminado");
+    }
+};
 
-    data
-        .filter(transaction => transaction.type === 'income')
-        .forEach(transaction => {
-            getItemsForTransaction(transaction).forEach(item => {
-                if (!item.name || item.qty <= 0) return;
+window.editTransaction = (id) => {
+    const transactions = getTransactions();
+    const transaction = transactions.find(item => item.id === id);
+    if (!transaction) return;
+    if (transaction.type === 'income') {
+        openSaleEditor(transaction);
+    } else {
+        openExpenseModal(transaction);
+    }
+};
 
-                const aggregation = getAggregationMeta(item.name);
-                if (!productStats[aggregation.key]) {
-                    productStats[aggregation.key] = {
-                        label: aggregation.label,
-                        qty: 0
-                    };
+// Event Listeners Setup
+function setupEventListeners() {
+    // Navigation
+    navBtns.dashboard?.addEventListener('click', () => switchView('dashboard'));
+    navBtns.tables?.addEventListener('click', () => switchView('tables'));
+    navBtns.transactions?.addEventListener('click', () => switchView('transactions'));
+    navBtns.products?.addEventListener('click', () => switchView('products'));
+    navBtns.backup?.addEventListener('click', () => switchView('backup'));
+    document.getElementById('btn-view-all')?.addEventListener('click', () => switchView('transactions'));
+
+    // Dashboard Time Filters
+    const filterBtns = document.querySelectorAll('.filter-btn');
+    const customDateTrigger = document.getElementById('custom-date-trigger');
+
+    let customDatePicker = null;
+    if (typeof flatpickr !== 'undefined' && customDateTrigger) {
+        customDatePicker = flatpickr(customDateTrigger, {
+            mode: "range",
+            dateFormat: "Y-m-d",
+            locale: "es",
+            onClose: (selectedDates) => {
+                if (selectedDates.length === 2) {
+                    customStartDate = selectedDates[0];
+                    customEndDate = selectedDates[1];
+                    currentFilter = 'custom';
+                    filterBtns.forEach(b => b.classList.remove('active'));
+                    customDateTrigger.classList.add('active');
+                    customDateLabel = `del ${customStartDate.toLocaleDateString('es-ES')} al ${customEndDate.toLocaleDateString('es-ES')}`;
+                    customDateTrigger.textContent = customDateLabel;
+                    updateDashboard();
                 }
-
-                productStats[aggregation.key].qty += Number(item.qty) || 0;
-            });
-        });
-
-    return Object.values(productStats)
-        .filter(item => item.qty > 0)
-        .sort((a, b) => {
-            if (b.qty !== a.qty) return b.qty - a.qty;
-            return a.label.localeCompare(b.label, 'es');
-        });
-}
-
-function renderProductsPeriodSummary(data) {
-    if (!dailyProductsList) return;
-
-    if (dailyProductsTitle) {
-        dailyProductsTitle.textContent = `Resumen de productos - ${getFilterLabel()}`;
-    }
-
-    const periodProducts = getProductsPeriodStats(data);
-
-    dailyProductsList.innerHTML = '';
-    if (periodProducts.length === 0) {
-        dailyProductsList.innerHTML = `
-            <div class="daily-products-empty">
-                Sin productos vendidos en este periodo
-            </div>
-        `;
-        return;
-    }
-
-    periodProducts.forEach(product => {
-        const row = document.createElement('div');
-        row.className = 'daily-product-item';
-
-        const name = document.createElement('span');
-        name.textContent = product.label;
-
-        const qty = document.createElement('strong');
-        qty.textContent = product.qty;
-
-        row.append(name, qty);
-        dailyProductsList.appendChild(row);
-    });
-}
-
-function renderTopSellers(data) {
-    setCollapsibleSectionState(topSellersPanel, btnToggleTopSellers, topSellersVisible);
-    if (!topSellersVisible) {
-        topSellersTbody.innerHTML = '';
-        return;
-    }
-
-    const sorted = getTopSellerStats(data);
-
-    topSellersTbody.innerHTML = '';
-    if (sorted.length === 0) {
-        topSellersTbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Sin datos para mostrar</td></tr>`;
-        return;
-    }
-
-    sorted.forEach(([name, stats]) => {
-        topSellersTbody.innerHTML += `
-            <tr>
-                <td style="font-weight: 500;">${stats.label || name}</td>
-                <td class="align-right">${stats.qty}</td>
-                <td class="align-right text-success">${formatMoney(stats.total)}</td>
-            </tr>
-        `;
-    });
-}
-
-function getTopExpenseStats(data) {
-    const expenseStats = {};
-
-    data
-        .filter(transaction => transaction.type === 'expense')
-        .forEach(transaction => {
-            const label = (transaction.desc || transaction.category || 'Gasto sin descripción').trim();
-            const key = normalizeText(label) || 'gasto-sin-descripcion';
-
-            if (!expenseStats[key]) {
-                expenseStats[key] = {
-                    label,
-                    count: 0,
-                    total: 0
-                };
             }
-
-            expenseStats[key].count += 1;
-            expenseStats[key].total += Number(transaction.amount) || 0;
         });
-
-    return Object.entries(expenseStats)
-        .sort((a, b) => {
-            if (b[1].total !== a[1].total) return b[1].total - a[1].total;
-            return b[1].count - a[1].count;
-        });
-}
-
-function renderTopExpenses(data) {
-    if (!topExpensesTbody) return;
-
-    setCollapsibleSectionState(topExpensesPanel, btnToggleTopExpenses, topExpensesVisible);
-    if (!topExpensesVisible) {
-        topExpensesTbody.innerHTML = '';
-        return;
     }
 
-    const sorted = getTopExpenseStats(data);
-
-    topExpensesTbody.innerHTML = '';
-    if (sorted.length === 0) {
-        topExpensesTbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Sin gastos para mostrar</td></tr>`;
-        return;
-    }
-
-    sorted.forEach(([name, stats]) => {
-        topExpensesTbody.innerHTML += `
-            <tr>
-                <td style="font-weight: 500;">${stats.label || name}</td>
-                <td class="align-right">${stats.count}</td>
-                <td class="align-right text-danger">${formatMoney(stats.total)}</td>
-            </tr>
-        `;
+    filterBtns.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const tgt = e.target.closest('.filter-btn');
+            if (!tgt || !tgt.dataset.filter) return;
+            filterBtns.forEach(b => b.classList.remove('active'));
+            if (customDateTrigger) {
+                customDateTrigger.classList.remove('active');
+                customDateTrigger.innerHTML = '<i class="ph ph-calendar"></i> Fechas';
+            }
+            tgt.classList.add('active');
+            currentFilter = tgt.dataset.filter;
+            updateDashboard();
+        });
     });
-}
 
-function renderBranchSalesSummary(data) {
-    if (!branchSalesList) return;
+    // Main Type Filters
+    const mainTypeFilters = document.getElementById('main-type-filters');
+    if (mainTypeFilters) {
+        mainTypeFilters.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-type-filter]');
+            if (!btn) return;
+            mainTypeFilter = btn.dataset.typeFilter || 'all';
+            mainTypeFilters.querySelectorAll('.type-filter-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.typeFilter === mainTypeFilter);
+            });
+            updateDashboard();
+            if (views.transactions?.classList.contains('active-view')) {
+                renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+            }
+        });
+    }
 
-    const salesByBranch = customBranches.map(branch => ({
-        name: branch.name,
-        total: data
-            .filter(item => item.type === 'income' && item.zone === branch.name)
-            .reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+    // History Filters & Search
+    const historyTypeFilterSelect = document.getElementById('history-type-filter');
+    const historySearchInput = document.getElementById('history-search');
+
+    historyTypeFilterSelect?.addEventListener('change', () => {
+        historyTypeFilter = historyTypeFilterSelect.value || 'all';
+        renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+    });
+
+    historySearchInput?.addEventListener('input', () => {
+        historySearchTerm = historySearchInput.value || '';
+        renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+    });
+
+    // Collapsible Panels
+    document.getElementById('btn-toggle-top-sellers')?.addEventListener('click', () => {
+        toggleTopSellersSection();
+        renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+    });
+
+    document.getElementById('btn-toggle-top-expenses')?.addEventListener('click', () => {
+        toggleTopExpensesSection();
+        renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+    });
+
+    document.getElementById('btn-toggle-history-transactions')?.addEventListener('click', () => {
+        toggleHistoryTransactionsSection();
+        renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+    });
+
+    // POS & Sales Events
+    document.getElementById('btn-new-sale')?.addEventListener('click', () => startNewSale());
+    document.getElementById('close-sale-modal')?.addEventListener('click', () => closeSaleModal());
+    document.getElementById('sale-branch-select')?.addEventListener('change', handleSaleBranchChange);
+    document.getElementById('sale-total-input')?.addEventListener('input', handleSaleTotalInput);
+    document.getElementById('sale-primary-action')?.addEventListener('click', () => handleSalePrimaryAction({
+        onUpdate: () => {
+            updateDashboard();
+            renderTablesView(getTransactions());
+            if (views.transactions?.classList.contains('active-view')) {
+                renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+            }
+        },
+        switchView
+    }));
+    document.getElementById('sale-close-table-btn')?.addEventListener('click', () => handleCloseActiveTable({
+        onUpdate: () => {
+            updateDashboard();
+            renderTablesView(getTransactions());
+        }
     }));
 
-    branchSalesList.innerHTML = salesByBranch.map(branch => `
-        <div class="branch-sales-item">
-            <span>${branch.name}</span>
-            <strong>${formatMoney(branch.total)}</strong>
-        </div>
-    `).join('');
-}
+    const saleMobileSwitch = document.getElementById('sale-mobile-switch');
+    if (saleMobileSwitch) {
+        saleMobileSwitch.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-sale-panel]');
+            if (btn) setSaleMobilePanel(btn.dataset.salePanel);
+        });
+    }
 
-function createRow(t, showDelete = true) {
-    const tr = document.createElement('tr');
+    document.getElementById('mobile-sale-summary')?.addEventListener('click', (e) => {
+        if (e.target.closest('.mobile-summary-btn')) {
+            setSaleMobilePanel('order');
+        }
+    });
 
-    let dateStr = "Fecha desconocida";
-    try {
-        if (t.date) {
-            const d = new Date(t.date);
-            if (!isNaN(d.getTime())) {
-                const options = { day: '2-digit', month: 'short', year: 'numeric' };
-                // Using standard Javascript to ensure formatting always works even if dateFns throws.
-                dateStr = d.toLocaleDateString('es-ES', options);
+    const saleProductsGrid = document.getElementById('sale-products-grid');
+    if (saleProductsGrid) {
+        saleProductsGrid.addEventListener('click', (event) => {
+            const btn = event.target.closest('button');
+            if (!btn) return;
+            
+            const productId = btn.dataset.productId;
+            const action = btn.dataset.action;
+            const product = getCustomProducts().find(p => p.id === productId);
+            const hasModifiers = product && Array.isArray(product.modifiers) && product.modifiers.length > 0;
+            
+            if (action === 'customize' || (hasModifiers && (action === 'add' || !action))) {
+                openModifiersModal(productId);
+            } else if (action === 'add' || !action) {
+                addItemToCurrentSale(productId);
+            } else if (action === 'increase') {
+                if (hasModifiers) openModifiersModal(productId);
+                else updateCurrentSaleItemQty(productId, 1);
+            } else if (action === 'decrease') {
+                updateCurrentSaleItemQty(productId, -1);
+            }
+        });
+    }
+
+    const saleOrderItems = document.getElementById('sale-order-items');
+    if (saleOrderItems) {
+        saleOrderItems.addEventListener('click', (event) => {
+            const button = event.target.closest('[data-sale-action]');
+            if (!button) return;
+            const { saleAction, id } = button.dataset;
+            if (saleAction === 'increase') updateCurrentSaleItemQty(id, 1);
+            if (saleAction === 'decrease') updateCurrentSaleItemQty(id, -1);
+            if (saleAction === 'remove') removeItemFromCurrentSale(id);
+        });
+    }
+
+    // Modifiers Modal Events
+    document.getElementById('close-modifiers-modal')?.addEventListener('click', closeModifiersModal);
+    document.getElementById('modifiers-modal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'modifiers-modal') closeModifiersModal();
+    });
+    document.getElementById('mod-qty-minus')?.addEventListener('click', () => {
+        const valEl = document.getElementById('mod-qty-val');
+        const currentQty = parseInt(valEl?.textContent || '1', 10);
+        if (currentQty > 1) {
+            const newQty = currentQty - 1;
+            if (valEl) valEl.textContent = String(newQty);
+            updateModifiersModalTotal();
+        }
+    });
+    document.getElementById('mod-qty-plus')?.addEventListener('click', () => {
+        const valEl = document.getElementById('mod-qty-val');
+        const currentQty = parseInt(valEl?.textContent || '1', 10);
+        const newQty = currentQty + 1;
+        if (valEl) valEl.textContent = String(newQty);
+        updateModifiersModalTotal();
+    });
+    document.getElementById('modifiers-modal-body')?.addEventListener('change', updateModifiersModalTotal);
+    document.getElementById('btn-confirm-modifiers')?.addEventListener('click', confirmAddProductWithModifiers);
+
+    // Expense Modal & Form Events
+    document.getElementById('btn-new-expense')?.addEventListener('click', () => openExpenseModal());
+    document.getElementById('close-modal')?.addEventListener('click', () => closeModal());
+    document.getElementById('transaction-form')?.addEventListener('submit', (e) => handleExpenseFormSubmit(e, {
+        onUpdate: () => {
+            updateDashboard();
+            if (views.transactions?.classList.contains('active-view')) {
+                renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
             }
         }
-    } catch (e) { }
+    }));
 
-    const badgeType = t.type === 'income' ? 'Ingreso' : 'Gasto';
-    const amountClass = t.type === 'income' ? 'text-success' : 'text-danger';
-    const sign = t.type === 'income' ? '+' : '-';
-    const zoneBadge = t.zone ? `<small style="display:block; color:var(--primary); font-size:0.75rem;"><i class="ph ph-map-pin"></i> ${t.zone}</small>` : '';
+    // Dynamic Expense Shortcut form in modal
+    const toggleAddExpense = document.getElementById('toggle-add-expense');
+    const newExpenseForm = document.getElementById('new-expense-form');
+    if (toggleAddExpense && newExpenseForm) {
+        toggleAddExpense.addEventListener('click', () => {
+            newExpenseForm.style.display = newExpenseForm.style.display === 'none' ? 'block' : 'none';
+        });
+    }
 
-    tr.innerHTML = `
-        <td>${dateStr}</td>
-        <td><span class="badge ${t.type}">${badgeType}</span></td>
-        <td>${t.desc} ${zoneBadge}</td>
-        <td>${t.category}</td>
-        <td class="align-right" style="font-weight: 600; color: var(--${t.type === 'income' ? 'success' : 'danger'})">
-            ${sign}${formatMoney(t.amount)}
-        </td>
-        ${showDelete ? `<td><div class="history-actions"><button class="btn-text" onclick="editTransaction('${t.id}')" title="Editar"><i class="ph ph-pencil-simple"></i></button><button class="btn-text" onclick="deleteTransaction('${t.id}')" title="Eliminar"><i class="ph ph-trash"></i></button></div></td>` : ''}
-    `;
-    return tr;
+    document.getElementById('save-new-expense')?.addEventListener('click', () => {
+        const nameInput = document.getElementById('new-exp-name');
+        const name = nameInput?.value.trim();
+        if (name) {
+            saveManagedExpenseTag();
+            if (nameInput) nameInput.value = '';
+            if (newExpenseForm) newExpenseForm.style.display = 'none';
+        }
+    });
+
+    // Tables View Events
+    const tablesBranchFilter = document.getElementById('tables-branch-filter');
+    tablesBranchFilter?.addEventListener('change', () => {
+        renderTablesView(getTransactions());
+        if (tablesBranchFilter.value) {
+            saveLocalState(STORAGE_KEYS.lastBranch, tablesBranchFilter.value);
+            renderManageProducts();
+        }
+    });
+    document.getElementById('btn-refresh-tables')?.addEventListener('click', () => renderTablesView(getTransactions()));
+
+    const tablesGrid = document.getElementById('tables-grid');
+    tablesGrid?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-table-action]');
+        if (!btn) return;
+        const { tableAction, id } = btn.dataset;
+
+        if (tableAction === 'edit') openTableEditor(id);
+        if (tableAction === 'charge') {
+            openTableEditor(id);
+            setSaleMobilePanel('order');
+        }
+        if (tableAction === 'delete') {
+            if (confirm("¿Estás seguro de eliminar esta mesa?")) {
+                deleteTable(id);
+                renderTablesView(getTransactions());
+                showToast("Mesa eliminada");
+            }
+        }
+    });
+
+    // Admin Products & Categories & Branches Events
+    document.getElementById('btn-sort-products-az')?.addEventListener('click', () => sortProductsAlphabetically(renderManageProducts));
+    document.getElementById('btn-sort-categories-az')?.addEventListener('click', () => sortCategoriesAlphabetically(renderManageCategories));
+    document.getElementById('products-branch-filter')?.addEventListener('change', renderManageProducts);
+
+    const manageNewProductForm = document.getElementById('manage-new-product-form');
+    document.getElementById('btn-add-product-manage')?.addEventListener('click', () => {
+        if (manageNewProductForm) {
+            resetManageProductForm();
+            manageNewProductForm.style.display = manageNewProductForm.style.display === 'none' ? 'block' : 'none';
+        }
+    });
+    document.getElementById('manage-save-product')?.addEventListener('click', saveManagedProduct);
+
+    const manageNewCategoryForm = document.getElementById('manage-new-category-form');
+    document.getElementById('btn-add-category-manage')?.addEventListener('click', () => {
+        if (manageNewCategoryForm) {
+            resetManageCategoryForm();
+            manageNewCategoryForm.style.display = manageNewCategoryForm.style.display === 'none' ? 'block' : 'none';
+        }
+    });
+    document.getElementById('manage-save-category')?.addEventListener('click', saveManagedCategory);
+
+    const manageNewBranchForm = document.getElementById('manage-new-branch-form');
+    document.getElementById('btn-add-branch-manage')?.addEventListener('click', () => {
+        if (manageNewBranchForm) {
+            resetManageBranchForm();
+            manageNewBranchForm.style.display = manageNewBranchForm.style.display === 'none' ? 'block' : 'none';
+        }
+    });
+    document.getElementById('manage-save-branch')?.addEventListener('click', saveManagedBranch);
+
+    const manageNewExpenseForm = document.getElementById('manage-new-expense-form');
+    document.getElementById('btn-add-expense-manage')?.addEventListener('click', () => {
+        if (manageNewExpenseForm) {
+            resetManageExpenseForm();
+            manageNewExpenseForm.style.display = manageNewExpenseForm.style.display === 'none' ? 'block' : 'none';
+        }
+    });
+    document.getElementById('manage-save-expense')?.addEventListener('click', saveManagedExpenseTag);
+
+    // Modifier Builder in Admin Form
+    const manageModGroupsContainer = document.getElementById('manage-modifier-groups-container');
+    document.getElementById('btn-add-modifier-group')?.addEventListener('click', () => {
+        if (!manageModGroupsContainer) return;
+        const div = document.createElement('div');
+        div.innerHTML = createModifierGroupCardHtml();
+        manageModGroupsContainer.appendChild(div.firstElementChild);
+        div.querySelector('.mod-group-name-input')?.focus();
+    });
+
+    manageModGroupsContainer?.addEventListener('click', (e) => {
+        const btnRemoveGroup = e.target.closest('.btn-remove-mod-group');
+        if (btnRemoveGroup) {
+            const card = btnRemoveGroup.closest('.modifier-group-card');
+            if (card) card.remove();
+            return;
+        }
+
+        const btnAddOption = e.target.closest('.btn-add-mod-option');
+        if (btnAddOption) {
+            const card = btnAddOption.closest('.modifier-group-card');
+            const optionsList = card?.querySelector('.mod-group-options-list');
+            if (optionsList) {
+                const div = document.createElement('div');
+                div.innerHTML = createModifierOptionRowHtml();
+                optionsList.appendChild(div.firstElementChild);
+                div.querySelector('input')?.focus();
+            }
+            return;
+        }
+
+        const btnRemoveOpt = e.target.closest('.btn-remove-mod-opt');
+        if (btnRemoveOpt) {
+            const row = btnRemoveOpt.closest('.mod-option-row-edit');
+            if (row) row.remove();
+            return;
+        }
+    });
+
+    // Admin Delegated List Handlers
+    document.getElementById('manage-products-list')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const { action, id, index, dir } = btn.dataset;
+        if (action === 'move') moveManagedProduct(Number(index), Number(dir));
+        if (action === 'edit') startEditingProduct(id);
+        if (action === 'delete') deleteManagedProduct(id);
+    });
+
+    document.getElementById('manage-categories-list')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const { action, id, index, dir } = btn.dataset;
+        if (action === 'category-move') reorderCategories(Number(index), Number(index) + Number(dir), renderManageCategories);
+        if (action === 'category-edit') startEditingCategory(id);
+        if (action === 'category-delete') deleteManagedCategory(id);
+    });
+
+    document.getElementById('manage-branches-list')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const { action, id } = btn.dataset;
+        if (action === 'branch-edit') startEditingBranch(id);
+        if (action === 'branch-delete') deleteManagedBranch(id);
+    });
+
+    document.getElementById('manage-expense-tags-list')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const { action, id } = btn.dataset;
+        if (action === 'expense-edit') startEditingExpenseTag(id);
+        if (action === 'expense-delete') deleteManagedExpenseTag(id);
+    });
+
+    // Exports
+    document.getElementById('btn-export-csv')?.addEventListener('click', () => {
+        downloadCSV(getFilteredData(), currentFilter, showToast);
+    });
+    document.getElementById('btn-export-image')?.addEventListener('click', () => {
+        const data = getFilteredData();
+        const customProducts = getCustomProducts();
+        downloadImageSummary(data, getFilterLabel(), currentFilter, getTopSellerStats(data, customProducts), showToast);
+    });
 }
 
-function getHistorySearchText(transaction) {
-    const dateText = formatExportDate(transaction.date);
-    const typeText = transaction.type === 'income' ? 'venta ingreso' : 'gasto egreso';
-    const amountText = String(transaction.amount || '');
-
-    return normalizeText([
-        dateText,
-        typeText,
-        transaction.desc,
-        transaction.category,
-        transaction.zone,
-        amountText
-    ].filter(Boolean).join(' '));
+// Authentication Flow
+function unlockApp() {
+    const loginScreen = document.getElementById('login-screen');
+    const mainApp = document.getElementById('main-app');
+    if (loginScreen) loginScreen.style.display = 'none';
+    if (mainApp) mainApp.style.display = 'flex';
 }
 
-function renderFullHistory() {
-    renderTopSellers(transactions);
-    renderTopExpenses(transactions);
-    setCollapsibleSectionState(historyTransactionsPanel, btnToggleHistoryTransactions, historyTransactionsVisible);
-    if (historyTypeFilterSelect && historyTypeFilterSelect.value !== historyTypeFilter) {
-        historyTypeFilterSelect.value = historyTypeFilter;
-    }
-    if (historySearchInput && historySearchInput.value !== historySearchTerm) {
-        historySearchInput.value = historySearchTerm;
-    }
-    historyTbody.innerHTML = '';
-    if (!historyTransactionsVisible) return;
+function initAuth() {
+    const loginScreen = document.getElementById('login-screen');
+    const mainApp = document.getElementById('main-app');
+    const loginForm = document.getElementById('login-form');
+    const loginError = document.getElementById('login-error');
+    const loginPasswordInput = document.getElementById('login-password');
+    const btnToggleLoginPassword = document.getElementById('toggle-login-password');
 
-    const normalizedSearch = normalizeText(historySearchTerm);
-    const visibleTransactions = historyTypeFilter === 'all'
-        ? transactions
-        : transactions.filter(transaction => transaction.type === historyTypeFilter);
-    const filteredTransactions = normalizedSearch
-        ? visibleTransactions.filter(transaction => getHistorySearchText(transaction).includes(normalizedSearch))
-        : visibleTransactions;
-
-    if (filteredTransactions.length === 0) {
-        historyTbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-muted)">Aún no hay transacciones</td></tr>`;
+    if (isAuthenticated()) {
+        unlockApp();
         return;
     }
-    filteredTransactions.forEach(t => historyTbody.appendChild(createRow(t, true)));
-}
 
-// Charts Logic
-function initCharts() {
-    const ctxMain = document.getElementById('mainChart').getContext('2d');
-    const ctxCat = document.getElementById('categoryChart').getContext('2d');
+    if (loginScreen) loginScreen.style.display = 'flex';
+    if (mainApp) mainApp.style.display = 'none';
 
-    Chart.defaults.color = '#94a3b8';
-    Chart.defaults.font.family = 'Inter';
-
-    charts.main = new Chart(ctxMain, {
-        type: 'bar',
-        data: { labels: [], datasets: [] },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: { grid: { color: 'rgba(255,255,255,0.05)' } },
-                x: { grid: { display: false } }
-            },
-            plugins: { legend: { position: 'top' } }
-        }
-    });
-
-    charts.category = new Chart(ctxCat, {
-        type: 'doughnut',
-        data: { labels: [], datasets: [] },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { position: 'right' } },
-            cutout: '75%'
-        }
-    });
-}
-
-function updateCharts(data) {
-    const groupedByDay = {};
-    data.forEach(t => {
-        let day = "N/A";
-        try {
-            if (t.date) {
-                const d = new Date(t.date);
-                if (!isNaN(d.getTime())) {
-                    day = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
-                }
+    loginForm?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const pw = loginPasswordInput?.value || '';
+        const isValid = await authenticate(pw);
+        if (isValid) {
+            if (loginError) loginError.style.display = 'none';
+            unlockApp();
+            showToast("Bienvenido de nuevo");
+        } else {
+            if (loginError) loginError.style.display = 'block';
+            if (loginPasswordInput) {
+                loginPasswordInput.value = '';
+                loginPasswordInput.focus();
             }
-        } catch (e) { }
-
-        if (!groupedByDay[day]) groupedByDay[day] = { inc: 0, exp: 0 };
-        if (t.type === 'income') groupedByDay[day].inc += t.amount;
-        else groupedByDay[day].exp += t.amount;
+        }
     });
 
-    const labels = Object.keys(groupedByDay).sort();
-    const incomes = labels.map(l => groupedByDay[l].inc);
-    const expenses = labels.map(l => groupedByDay[l].exp);
+    btnToggleLoginPassword?.addEventListener('click', () => {
+        if (!loginPasswordInput) return;
+        const isHidden = loginPasswordInput.type === 'password';
+        loginPasswordInput.type = isHidden ? 'text' : 'password';
+        const icon = btnToggleLoginPassword.querySelector('i');
+        if (icon) {
+            icon.className = isHidden ? 'ph ph-eye-slash' : 'ph ph-eye';
+        }
+    });
+}
 
-    charts.main.data = {
-        labels,
-        datasets: [
-            { label: 'Ingresos', data: incomes, backgroundColor: '#10b981', borderRadius: 4 },
-            { label: 'Gastos', data: expenses, backgroundColor: '#ef4444', borderRadius: 4 }
-        ]
+// Main App Initialization
+function init() {
+    views = {
+        dashboard: document.getElementById('view-dashboard'),
+        tables: document.getElementById('view-tables'),
+        transactions: document.getElementById('view-transactions'),
+        products: document.getElementById('view-products'),
+        backup: document.getElementById('view-backup')
     };
-    charts.main.update();
 
-    const totalInc = data.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
-    const totalExp = data.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
-    const branchBreakdown = customBranches
-        .map(branch => ({
-            name: branch.name,
-            color: getStableBranchColor(branch),
-            total: data
-                .filter(item => item.type === 'income' && item.zone === branch.name)
-                .reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
-        }))
-        .filter(item => item.total > 0);
+    navBtns = {
+        dashboard: document.getElementById('nav-dashboard'),
+        tables: document.getElementById('nav-tables'),
+        transactions: document.getElementById('nav-transactions'),
+        products: document.getElementById('nav-products'),
+        backup: document.getElementById('nav-backup')
+    };
 
-    if (branchBreakdown.length === 0) {
-        charts.category.data = { labels: ['Sin datos'], datasets: [{ data: [1], backgroundColor: ['#334155'], borderWidth: 0 }] };
-        document.getElementById('balance-stats-container').innerHTML = '';
-    } else {
-        charts.category.data = {
-            labels: branchBreakdown.map(item => item.name),
-            datasets: [{
-                data: branchBreakdown.map(item => item.total),
-                backgroundColor: branchBreakdown.map(item => item.color),
-                borderWidth: 0
-            }]
-        };
+    initAuth();
+    setupEventListeners();
 
-        const diff = totalInc - totalExp;
-        const diffText = diff >= 0 ? 'Ganancia Neta' : 'Pérdida';
-        const diffClass = diff >= 0 ? 'profit' : 'loss';
+    // Initial Subscriptions & Sync
+    subscribeProducts(() => {
+        renderManageProducts();
+        renderSaleProducts();
+        updateDashboard();
+    });
 
-        document.getElementById('balance-stats-container').innerHTML = `
-            <div class="balance-stats">
-                <div class="balance-stat-item income">
-                    <span class="label">Ventas Totales</span>
-                    <span class="value">${formatMoney(totalInc)}</span>
-                    <span style="font-size:0.8rem">${branchBreakdown.length} sucursales con ventas</span>
-                </div>
-                <div class="balance-stat-item expense">
-                    <span class="label">Gastos</span>
-                    <span class="value">${formatMoney(totalExp)}</span>
-                    <span style="font-size:0.8rem">Total del periodo</span>
-                </div>
-            </div>
-            <div class="balance-result ${diffClass}">
-                ${diffText}: ${formatMoney(Math.abs(diff))}
-            </div>
-        `;
+    subscribeCategories(() => {
+        renderCategoryOptions();
+        renderManageCategories();
+    });
+
+    subscribeBranches(() => {
+        renderManageBranches();
+        renderManageProductBranchOptions();
+        renderTablesBranchFilter();
+        renderSaleBranchOptions();
+        renderSaleProducts();
+        renderTablesView(getTransactions());
+        updateDashboard();
+    });
+
+    subscribeExpenseTags(() => {
+        renderExpenseTags();
+        renderManageExpenseTags();
+    });
+
+    subscribeOpenTables(() => {
+        renderTablesView(getTransactions());
+    });
+
+    fetchTransactions((transactions) => {
+        updateDashboard();
+        renderTablesView(transactions);
+        if (views.transactions?.classList.contains('active-view')) {
+            renderFullHistory(transactions, { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+        }
+    });
+
+    syncStrandedOfflineTransactions();
+
+    // Setup visual date on top header
+    const dateDisplay = document.getElementById('current-date-display');
+    if (dateDisplay) {
+        const today = new Date();
+        const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+        dateDisplay.textContent = today.toLocaleDateString('es-ES', options);
     }
-    charts.category.update();
+
+    switchView('dashboard');
 }
 
 if (document.readyState === 'loading') {
@@ -4098,12 +750,10 @@ if (document.readyState === 'loading') {
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.getRegistrations()
-            .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+            .then((registrations) => Promise.all(registrations.map((r) => r.unregister())))
             .then(() => caches.keys())
-            .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
-            .catch((error) => {
-                console.warn('No se pudieron limpiar los service workers:', error);
-            });
+            .then((keys) => Promise.all(keys.map((k) => caches.delete(k))))
+            .catch((err) => console.warn('No se pudieron limpiar los service workers:', err));
     });
 }
 

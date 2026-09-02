@@ -1,14 +1,15 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
 import { getFirestore, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 
+// Reemplaza con tus credenciales de Firebase Console
 const firebaseConfig = {
-  apiKey: "AIzaSyB86JgD1A7kDyWMkzBEv2pe3kp8vSO3NOI",
-  authDomain: "la-barra-data.firebaseapp.com",
-  projectId: "la-barra-data",
-  storageBucket: "la-barra-data.firebasestorage.app",
-  messagingSenderId: "569077611362",
-  appId: "1:569077611362:web:6385174d945499a8278a3b",
-  measurementId: "G-NEK5169RD2"
+  apiKey: "TU_API_KEY_AQUI",
+  authDomain: "tu-proyecto.firebaseapp.com",
+  projectId: "tu-proyecto",
+  storageBucket: "tu-proyecto.firebasestorage.app",
+  messagingSenderId: "1234567890",
+  appId: "1:1234567890:web:abcdef123456",
+  measurementId: "G-XXXXXXXXXX"
 };
 
 // Initialize Firebase
@@ -25,7 +26,7 @@ try {
         }
     });
 
-    console.log("🔥 Firebase y Base de Datos Inicializados Correctamente");
+    console.log("🔥 Firebase y Base de Datos Inicializados");
 } catch (e) {
     console.error("Error al inicializar Firebase:", e);
 }

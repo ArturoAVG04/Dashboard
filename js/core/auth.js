@@ -20,9 +20,12 @@ async function sha256Hex(value) {
 }
 
 export async function authenticate(password) {
-    const hash = await sha256Hex(password);
     const normalizedPassword = String(password || '').trim();
-    const isValid = hash === PASSWORD_HASH || normalizedPassword === 'hamburguesa';
+    const hash = await sha256Hex(normalizedPassword.toLowerCase());
+    const originalHash = await sha256Hex(normalizedPassword);
+    const isValid = hash === PASSWORD_HASH || 
+                    originalHash === PASSWORD_HASH || 
+                    normalizedPassword.toLowerCase() === 'hamburguesa';
 
     if (isValid) {
         localStorage.setItem(AUTH_SESSION_KEY, Date.now().toString());
