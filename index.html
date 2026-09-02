@@ -352,6 +352,22 @@
                             <div id="manage-product-branches" class="mini-check-grid"></div>
                             <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.5rem;">Si no seleccionas ninguna, el producto estará disponible en todas.</p>
                         </div>
+                        <div class="manage-product-modifiers-section" style="margin-top: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border-color);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+                                <label style="font-weight: 600; margin: 0; display: flex; align-items: center; gap: 0.4rem; color: var(--text-main);">
+                                    <i class="ph ph-sliders" style="color: var(--primary);"></i> Modificadores / Opciones
+                                </label>
+                                <button type="button" class="btn-text" id="btn-add-modifier-group" style="font-size: 0.8rem; padding: 0.25rem 0.6rem;">
+                                    <i class="ph ph-plus"></i> Agregar Grupo
+                                </button>
+                            </div>
+                            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+                                Configura opciones como salsas, aderezos o extras con selección única (radio) o casillas de selección múltiple.
+                            </p>
+                            <div id="manage-modifier-groups-container" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                                <!-- js injected modifier groups -->
+                            </div>
+                        </div>
                     </div>
                     <div id="manage-products-list">
                         <!-- js injected -->
@@ -474,60 +490,41 @@
         </div>
     </div>
 
-    <!-- Modal Form -->
+    <!-- Product Modifiers Selection Modal -->
+    <div class="modal-overlay" id="modifiers-modal" style="z-index: 10000;">
+        <div class="modal modifiers-modal">
+            <div class="modal-header">
+                <div>
+                    <h2 id="mod-modal-prod-name">Personalizar Producto</h2>
+                    <p id="mod-modal-prod-price" style="color: var(--success); font-weight: 600; font-size: 0.95rem; margin-top: 0.25rem;">$0.00</p>
+                </div>
+                <button class="close-btn" id="close-modifiers-modal"><i class="ph ph-x"></i></button>
+            </div>
+            <div id="modifiers-modal-body" class="modifiers-modal-body">
+                <!-- Modifiers injected via JS -->
+            </div>
+            <div class="modifiers-modal-footer">
+                <div class="mod-qty-selector">
+                    <button type="button" class="qty-btn" id="mod-qty-minus">-</button>
+                    <span id="mod-qty-val">1</span>
+                    <button type="button" class="qty-btn" id="mod-qty-plus">+</button>
+                </div>
+                <button type="button" class="submit-btn" id="btn-confirm-modifiers" style="margin-top: 0;">
+                    <i class="ph ph-plus-circle"></i> Agregar al Pedido (<span id="mod-modal-total">$0.00</span>)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Expense Modal Form -->
     <div class="modal-overlay" id="transaction-modal">
         <div class="modal">
             <div class="modal-header">
-                <h2 id="transaction-modal-title">Registrar Movimiento</h2>
+                <h2 id="transaction-modal-title">Registrar Gasto</h2>
                 <button class="close-btn" id="close-modal"><i class="ph ph-x"></i></button>
             </div>
             <form id="transaction-form">
-                <div class="type-selector" style="display: none;">
-                    <label class="radio-card income-radio">
-                        <input type="radio" name="type" value="income" checked>
-                        <div class="radio-content">
-                            <i class="ph ph-storefront"></i> Nueva Venta
-                        </div>
-                    </label>
-                    <label class="radio-card expense-radio">
-                        <input type="radio" name="type" value="expense">
-                        <div class="radio-content">
-                            <i class="ph ph-shopping-cart"></i> Gasto / Insumo
-                        </div>
-                    </label>
-                </div>
-
-                <div id="extra-sales-fields">
-                    <div class="form-group">
-                        <label>Zona de Venta</label>
-                        <select id="zone-select"></select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                            <label style="margin: 0;">Productos Vendidos</label>
-                            <button type="button" class="btn-text" id="toggle-add-product" style="font-size: 0.8rem;"><i class="ph ph-plus"></i> Nuevo</button>
-                        </div>
-                        
-                        <div id="new-product-form" style="display: none; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid var(--primary);">
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
-                                <input type="text" id="new-prod-name" placeholder="Nombre (Ej. Refresco Lata)">
-                                <input type="number" id="new-prod-price" placeholder="Precio ($)" min="0" step="0.5">
-                            </div>
-                            <div style="display: flex; gap: 0.5rem;">
-                                <select id="new-prod-cat" style="flex-grow: 1;"></select>
-                                <button type="button" id="save-new-product" style="background: var(--success); color: white; border: none; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer;">Guardar</button>
-                            </div>
-                        </div>
-
-                        <div class="products-list-container scrollable-products" id="products-container">
-                            <!-- Injected by JS -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- DESCRIPTION ONLY FOR EXPENSES -->
-                <div id="desc-group" style="display:none;">
+                <div id="desc-group">
                     <div class="form-group">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                             <label style="margin: 0;">Atajos de Insumos / Gastos</label>
@@ -556,7 +553,7 @@
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="amount" id="amount-label">Total de la Venta ($)</label>
+                        <label for="amount" id="amount-label">Monto del Gasto ($)</label>
                         <input type="number" id="amount" step="0.5" min="0" placeholder="0.00" required>
                     </div>
                     <div class="form-group">
@@ -565,7 +562,7 @@
                     </div>
                 </div>
 
-                <button type="submit" class="submit-btn"><i class="ph ph-check-circle"></i> Guardar Registro</button>
+                <button type="submit" class="submit-btn" style="background: var(--danger);"><i class="ph ph-check-circle"></i> Guardar Gasto</button>
             </form>
         </div>
     </div>

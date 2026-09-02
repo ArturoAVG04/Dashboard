@@ -166,6 +166,21 @@ const saleTableBanner = document.getElementById('sale-table-banner');
 const saleMobileSwitch = document.getElementById('sale-mobile-switch');
 const saleLayout = document.querySelector('.sale-layout');
 const mobileSaleSummary = document.getElementById('mobile-sale-summary');
+const manageModGroupsContainer = document.getElementById('manage-modifier-groups-container');
+const btnAddModGroup = document.getElementById('btn-add-modifier-group');
+const modifiersModal = document.getElementById('modifiers-modal');
+const closeModifiersModalBtn = document.getElementById('close-modifiers-modal');
+const modModalProdName = document.getElementById('mod-modal-prod-name');
+const modModalProdPrice = document.getElementById('mod-modal-prod-price');
+const modModalBody = document.getElementById('modifiers-modal-body');
+const modModalTotal = document.getElementById('mod-modal-total');
+const btnConfirmModifiers = document.getElementById('btn-confirm-modifiers');
+const modQtyMinusBtn = document.getElementById('mod-qty-minus');
+const modQtyPlusBtn = document.getElementById('mod-qty-plus');
+const modQtyVal = document.getElementById('mod-qty-val');
+
+let currentModProduct = null;
+let currentModQty = 1;
 
 function scrollToTop() {
     window.scrollTo(0, 0);
@@ -200,6 +215,28 @@ function getLocalDateInputValue(date = new Date()) {
     return new Date(date.getTime() - tzOffset).toISOString().slice(0, 10);
 }
 
+function isSameLocalDate(dateA, dateB = new Date()) {
+    if (!dateA) return false;
+    try {
+        const dA = typeof dateA === 'string' || typeof dateA === 'number' ? new Date(dateA) : dateA;
+        const dB = typeof dateB === 'string' || typeof dateB === 'number' ? new Date(dateB) : dateB;
+        if (isNaN(dA.getTime()) || isNaN(dB.getTime())) return false;
+        return getLocalDateInputValue(dA) === getLocalDateInputValue(dB);
+    } catch (e) {
+        return false;
+    }
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
 function createLocalDateFromInput(dateValue) {
     const nowLocal = new Date();
     if (!dateValue) return nowLocal;
@@ -219,6 +256,20 @@ function normalizeProduct(product, index = 0) {
         category: product.category || 'General',
         availableInBranches: Array.isArray(product.availableInBranches)
             ? product.availableInBranches.filter(Boolean)
+            : [],
+        modifiers: Array.isArray(product.modifiers)
+            ? product.modifiers.map((group, gIdx) => ({
+                id: group.id || `mod_${Date.now()}_${gIdx}`,
+                name: String(group.name || '').trim(),
+                type: group.type === 'multiple' ? 'multiple' : 'single',
+                options: Array.isArray(group.options)
+                    ? group.options.map((opt, oIdx) => ({
+                        id: opt.id || `opt_${Date.now()}_${oIdx}`,
+                        name: String(typeof opt === 'string' ? opt : (opt.name || '')).trim(),
+                        price: Number(opt.price) || 0
+                    })).filter(opt => opt.name !== '')
+                    : []
+            })).filter(group => group.name !== '' && group.options.length > 0)
             : []
     };
 }
@@ -229,11 +280,18 @@ function normalizeProducts(products) {
 
 function normalizeTable(table, index = 0) {
     const items = Array.isArray(table.items)
-        ? table.items.map(item => ({
+        ? table.items.map((item, itemIdx) => ({
+            id: item.id || `item_${item.productId || 'p'}_${Date.now()}_${itemIdx}`,
             productId: item.productId || '',
             name: item.name || 'Producto',
+            basePrice: typeof item.basePrice === 'number' ? item.basePrice : (Number(item.price) || 0),
             price: Number(item.price) || 0,
-            qty: Number(item.qty) || 0
+            qty: Number(item.qty) || 0,
+            selectedModifiers: Array.isArray(item.selectedModifiers)
+                ? item.selectedModifiers
+                : (Array.isArray(item.modifiers) ? item.modifiers : []),
+            modifierText: item.modifierText || '',
+            modSignature: item.modSignature || ''
         })).filter(item => item.qty > 0)
         : [];
 
@@ -359,23 +417,24 @@ function init() {
 }
 
 function unlockApp() {
-    loginScreen.style.display = 'none';
-    mainApp.style.display = 'flex';
+    if (loginScreen) loginScreen.style.display = 'none';
+    if (mainApp) mainApp.style.display = 'flex';
     scrollToTop();
 
-    // Si ya tenemos transacciones locales, las mostramos primero
-    if (transactions.length > 0) {
+    try {
         updateDashboard();
-        if (views.transactions.classList.contains('active-view')) renderFullHistory();
-    }
+        if (views.transactions && views.transactions.classList.contains('active-view')) {
+            renderFullHistory();
+        }
+    } catch (e) { console.error("Error actualizando dashboard:", e); }
 
-    syncStrandedOfflineTransactions();
-    fetchTransactions();
-    subscribeProducts();
-    subscribeExpenseTags();
-    subscribeBranches();
-    subscribeCategories();
-    subscribeOpenTables();
+    try { syncStrandedOfflineTransactions(); } catch (e) { console.warn("Error syncStrandedOfflineTransactions:", e); }
+    try { fetchTransactions(); } catch (e) { console.warn("Error fetchTransactions:", e); }
+    try { subscribeProducts(); } catch (e) { console.warn("Error subscribeProducts:", e); }
+    try { subscribeExpenseTags(); } catch (e) { console.warn("Error subscribeExpenseTags:", e); }
+    try { subscribeBranches(); } catch (e) { console.warn("Error subscribeBranches:", e); }
+    try { subscribeCategories(); } catch (e) { console.warn("Error subscribeCategories:", e); }
+    try { subscribeOpenTables(); } catch (e) { console.warn("Error subscribeOpenTables:", e); }
 }
 
 async function syncProductsToCloud() {
@@ -396,6 +455,7 @@ async function syncProductsToCloud() {
                 price: product.price,
                 category: product.category,
                 availableInBranches: Array.isArray(product.availableInBranches) ? product.availableInBranches : [],
+                modifiers: Array.isArray(product.modifiers) ? product.modifiers : [],
                 order: index
             });
         });
@@ -777,12 +837,12 @@ function setupEventListeners() {
     }
 
     // Navigation
-    navBtns.dashboard.addEventListener('click', () => switchView('dashboard'));
-    navBtns.tables.addEventListener('click', () => switchView('tables'));
-    navBtns.transactions.addEventListener('click', () => switchView('transactions'));
-    navBtns.products.addEventListener('click', () => switchView('products'));
-    navBtns.backup.addEventListener('click', () => switchView('backup'));
-    btnViewAll.addEventListener('click', () => switchView('transactions'));
+    navBtns.dashboard?.addEventListener('click', () => switchView('dashboard'));
+    navBtns.tables?.addEventListener('click', () => switchView('tables'));
+    navBtns.transactions?.addEventListener('click', () => switchView('transactions'));
+    navBtns.products?.addEventListener('click', () => switchView('products'));
+    navBtns.backup?.addEventListener('click', () => switchView('backup'));
+    btnViewAll?.addEventListener('click', () => switchView('transactions'));
     customDateTrigger?.addEventListener('click', () => {
         customDatePicker?.open();
     });
@@ -836,18 +896,18 @@ function setupEventListeners() {
     document.getElementById('products-branch-filter')?.addEventListener('change', renderManageProducts);
 
     // Exports
-    document.getElementById('btn-export-image').addEventListener('click', downloadImageSummary);
-    document.getElementById('btn-export-csv').addEventListener('click', downloadCSV);
+    document.getElementById('btn-export-image')?.addEventListener('click', downloadImageSummary);
+    document.getElementById('btn-export-csv')?.addEventListener('click', downloadCSV);
 
     // Modal
-    btnNewSale.addEventListener('click', () => startNewSale());
-    btnNewExpense.addEventListener('click', () => openExpenseModal());
-    btnCloseModal.addEventListener('click', () => closeModal());
-    closeSaleModalBtn.addEventListener('click', () => closeSaleModal());
-    saleBranchSelect.addEventListener('change', handleSaleBranchChange);
-    saleTotalInput.addEventListener('input', handleSaleTotalInput);
-    salePrimaryAction.addEventListener('click', handleSalePrimaryAction);
-    saleCloseTableBtn.addEventListener('click', handleCloseActiveTable);
+    btnNewSale?.addEventListener('click', () => startNewSale());
+    btnNewExpense?.addEventListener('click', () => openExpenseModal());
+    btnCloseModal?.addEventListener('click', () => closeModal());
+    closeSaleModalBtn?.addEventListener('click', () => closeSaleModal());
+    saleBranchSelect?.addEventListener('change', handleSaleBranchChange);
+    saleTotalInput?.addEventListener('input', handleSaleTotalInput);
+    salePrimaryAction?.addEventListener('click', handleSalePrimaryAction);
+    saleCloseTableBtn?.addEventListener('click', handleCloseActiveTable);
 
     if (saleMobileSwitch) {
         saleMobileSwitch.addEventListener('click', (event) => {
@@ -879,11 +939,9 @@ function setupEventListeners() {
         });
     }
 
-    typeSelectors.forEach(radio => {
-        radio.addEventListener('change', (e) => toggleFormType(e.target.value));
-    });
-
-    form.addEventListener('submit', handleFormSubmit);
+    if (form) {
+        form.addEventListener('submit', handleFormSubmit);
+    }
 
     // Filters
     filterBtns.forEach(btn => {
@@ -900,30 +958,12 @@ function setupEventListeners() {
         });
     });
 
-    // Dynamic Form UI Toggles
-    btnToggleAddProduct.addEventListener('click', () => {
-        newProductForm.style.display = newProductForm.style.display === 'none' ? 'block' : 'none';
-    });
-
-    btnToggleAddExpense.addEventListener('click', () => {
-        newExpenseForm.style.display = newExpenseForm.style.display === 'none' ? 'block' : 'none';
-    });
-
-    // Save Custom Product
-    btnSaveNewProduct.addEventListener('click', () => {
-        const name = document.getElementById('new-prod-name').value.trim();
-        const price = parseFloat(document.getElementById('new-prod-price').value);
-        const cat = modalProductCategoryInput.value;
-        if (name && !isNaN(price)) {
-            customProducts = upsertProduct(customProducts, { name, price, category: cat });
-
-            document.getElementById('new-prod-name').value = '';
-            document.getElementById('new-prod-price').value = '';
-            newProductForm.style.display = 'none';
-            saveProductsState();
-            showToast("Producto agregado a tu lista");
-        }
-    });
+    // Dynamic Expense Form UI Toggles
+    if (btnToggleAddExpense && newExpenseForm) {
+        btnToggleAddExpense.addEventListener('click', () => {
+            newExpenseForm.style.display = newExpenseForm.style.display === 'none' ? 'block' : 'none';
+        });
+    }
 
     // Save Custom Expense Tag
     btnSaveNewExpense.addEventListener('click', () => {
@@ -1098,6 +1138,85 @@ function setupEventListeners() {
         });
     }
 
+    if (manageModGroupsContainer) {
+        manageModGroupsContainer.addEventListener('click', (e) => {
+            const btnRemoveGroup = e.target.closest('.btn-remove-mod-group');
+            if (btnRemoveGroup) {
+                const card = btnRemoveGroup.closest('.modifier-group-card');
+                if (card) card.remove();
+                return;
+            }
+
+            const btnAddOption = e.target.closest('.btn-add-mod-option');
+            if (btnAddOption) {
+                const card = btnAddOption.closest('.modifier-group-card');
+                const optionsList = card?.querySelector('.mod-group-options-list');
+                if (optionsList) {
+                    const div = document.createElement('div');
+                    div.innerHTML = createModifierOptionRowHtml();
+                    optionsList.appendChild(div.firstElementChild);
+                    div.querySelector('input')?.focus();
+                }
+                return;
+            }
+
+            const btnRemoveOpt = e.target.closest('.btn-remove-mod-opt');
+            if (btnRemoveOpt) {
+                const row = btnRemoveOpt.closest('.mod-option-row-edit');
+                if (row) row.remove();
+                return;
+            }
+        });
+    }
+
+    if (btnAddModGroup) {
+        btnAddModGroup.addEventListener('click', () => {
+            if (!manageModGroupsContainer) return;
+            const div = document.createElement('div');
+            div.innerHTML = createModifierGroupCardHtml();
+            manageModGroupsContainer.appendChild(div.firstElementChild);
+            div.querySelector('.mod-group-name-input')?.focus();
+        });
+    }
+
+    if (closeModifiersModalBtn) {
+        closeModifiersModalBtn.addEventListener('click', closeModifiersModal);
+    }
+
+    if (modifiersModal) {
+        modifiersModal.addEventListener('click', (e) => {
+            if (e.target === modifiersModal) closeModifiersModal();
+        });
+    }
+
+    if (modQtyMinusBtn) {
+        modQtyMinusBtn.addEventListener('click', () => {
+            if (currentModQty > 1) {
+                currentModQty--;
+                if (modQtyVal) modQtyVal.textContent = String(currentModQty);
+                updateModifiersModalTotal();
+            }
+        });
+    }
+
+    if (modQtyPlusBtn) {
+        modQtyPlusBtn.addEventListener('click', () => {
+            currentModQty++;
+            if (modQtyVal) modQtyVal.textContent = String(currentModQty);
+            updateModifiersModalTotal();
+        });
+    }
+
+    if (modModalBody) {
+        modModalBody.addEventListener('change', () => {
+            updateModifiersModalTotal();
+        });
+    }
+
+    if (btnConfirmModifiers) {
+        btnConfirmModifiers.addEventListener('click', confirmAddProductWithModifiers);
+    }
+
     if (saleProductsGrid) {
         saleProductsGrid.addEventListener('click', (event) => {
             const btn = event.target.closest('button');
@@ -1105,11 +1224,23 @@ function setupEventListeners() {
             
             const productId = btn.dataset.productId;
             const action = btn.dataset.action;
+            const product = customProducts.find(p => p.id === productId);
+            const hasModifiers = product && Array.isArray(product.modifiers) && product.modifiers.length > 0;
             
-            if (action === 'add' || !action) {
-                addItemToCurrentSale(productId);
+            if (action === 'customize') {
+                openModifiersModal(productId);
+            } else if (action === 'add' || !action) {
+                if (hasModifiers) {
+                    openModifiersModal(productId);
+                } else {
+                    addItemToCurrentSale(productId);
+                }
             } else if (action === 'increase') {
-                updateCurrentSaleItemQty(productId, 1);
+                if (hasModifiers) {
+                    openModifiersModal(productId);
+                } else {
+                    updateCurrentSaleItemQty(productId, 1);
+                }
             } else if (action === 'decrease') {
                 updateCurrentSaleItemQty(productId, -1);
             }
@@ -1151,46 +1282,47 @@ function switchView(viewName) {
     scrollToTop();
 }
 
-function openModal(transaction = null) {
+function openExpenseModal(transaction = null) {
+    if (!form || !modal) return;
     form.reset();
     resetSelectedExpenses();
     editingTransactionId = transaction?.id || null;
-    modalTitle.textContent = editingTransactionId ? 'Editar Movimiento' : 'Registrar Movimiento';
+    modalTitle.textContent = editingTransactionId ? 'Editar Gasto' : 'Registrar Gasto';
 
-    // Set default date to LOCAL date instead of UTC to avoid "Tomorrow" timezone bugs.
-    document.getElementById('date').value = getLocalDateInputValue();
+    if (newExpenseForm) newExpenseForm.style.display = 'none';
 
-    toggleFormType('income');
-    newProductForm.style.display = 'none';
-    newExpenseForm.style.display = 'none';
-
-    document.querySelectorAll('.product-qty').forEach(input => input.value = 0);
-    calculateSubtotals();
-
-    document.getElementById('description').value = '';
     if (transaction) {
-        populateTransactionForm(transaction);
+        document.getElementById('description').value = transaction.desc || '';
+        if (totalSalesAmount) totalSalesAmount.value = Number(transaction.amount) || '';
+        if (transaction.date) {
+            document.getElementById('date').value = getLocalDateInputValue(new Date(transaction.date));
+        } else {
+            document.getElementById('date').value = getLocalDateInputValue();
+        }
+    } else {
+        document.getElementById('description').value = '';
+        if (totalSalesAmount) totalSalesAmount.value = '';
+        document.getElementById('date').value = getLocalDateInputValue();
     }
 
     modal.classList.add('open');
     scrollToTop();
 }
 
+function openModal(transaction = null) {
+    openExpenseModal(transaction);
+}
+
 function closeModal() {
     editingTransactionId = null;
-    modalTitle.textContent = 'Registrar Movimiento';
-    modal.classList.remove('open');
+    modalTitle.textContent = 'Registrar Gasto';
+    if (modal) modal.classList.remove('open');
     resetSelectedExpenses();
     scrollToTop();
 }
 
 function initFormZones() {
-    zoneSelect.innerHTML = '';
-    customBranches.forEach(branch => {
-        const o = document.createElement('option');
-        o.value = o.textContent = branch.name;
-        zoneSelect.appendChild(o);
-    });
+    // Legacy stub - branches are managed in Manage Branches
 }
 
 function renderSaleBranchOptions() {
@@ -1280,6 +1412,8 @@ function renderCategoryOptions() {
 }
 
 function renderProductsList() {
+    if (!productsContainer) return;
+
     productsContainer.innerHTML = '';
     const grouped = groupProductsByCategory(customProducts);
 
@@ -1533,6 +1667,7 @@ function renderManageProducts() {
                     <div style="font-weight: 500;">${p.name} <small style="color:var(--text-muted)">(${p.category || 'Sin categoría'})</small></div>
                     <div style="color: var(--success); font-size: 0.9rem;">$${p.price}</div>
                     <div style="color: var(--text-muted); font-size: 0.8rem;">${Array.isArray(p.availableInBranches) && p.availableInBranches.length > 0 ? `${p.availableInBranches.length} sucursales asignadas` : 'Disponible en todas las sucursales'}</div>
+                    ${Array.isArray(p.modifiers) && p.modifiers.length > 0 ? `<div style="color: var(--primary); font-size: 0.8rem; margin-top: 0.2rem;"><i class="ph ph-sliders"></i> ${p.modifiers.length} grupo${p.modifiers.length === 1 ? '' : 's'} de opciones (${p.modifiers.map(g => g.name).join(', ')})</div>` : ''}
                 </div>
             </div>
             <div style="display:flex; align-items:center; gap:0.5rem;">
@@ -1608,12 +1743,111 @@ function saveCategoriesState() {
     syncCategoriesToCloud();
 }
 
+function createModifierOptionRowHtml(opt = null) {
+    const optName = typeof opt === 'string' ? opt : (opt?.name || '');
+    const optPrice = typeof opt === 'object' && opt?.price ? opt.price : '';
+
+    return `
+        <div class="mod-option-row-edit">
+            <input type="text" class="mod-opt-name-input" placeholder="Opción (ej. Barbecue)" value="${escapeHtml(optName)}">
+            <input type="number" class="mod-opt-price-input" placeholder="Extra $" min="0" step="0.5" value="${optPrice}">
+            <button type="button" class="btn-icon delete btn-remove-mod-opt" title="Quitar opción"><i class="ph ph-x"></i></button>
+        </div>
+    `;
+}
+
+function createModifierGroupCardHtml(group = null) {
+    const groupId = group?.id || `mod_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const groupName = group?.name || '';
+    const groupType = group?.type === 'multiple' ? 'multiple' : 'single';
+    const options = Array.isArray(group?.options) && group.options.length > 0 ? group.options : [
+        { name: '', price: 0 }
+    ];
+
+    return `
+        <div class="modifier-group-card" data-group-id="${groupId}">
+            <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;">
+                <input type="text" class="mod-group-name-input" placeholder="Nombre (ej. Salsa)" value="${escapeHtml(groupName)}" required>
+                <select class="mod-group-type-select">
+                    <option value="single" ${groupType === 'single' ? 'selected' : ''}>1 sola opción (Radio)</option>
+                    <option value="multiple" ${groupType === 'multiple' ? 'selected' : ''}>Varias opciones (Casillas)</option>
+                </select>
+                <button type="button" class="btn-icon delete btn-remove-mod-group" title="Eliminar grupo"><i class="ph ph-trash"></i></button>
+            </div>
+            <div class="mod-group-options-list" style="display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.5rem;">
+                ${options.map(opt => createModifierOptionRowHtml(opt)).join('')}
+            </div>
+            <button type="button" class="btn-text btn-add-mod-option" style="font-size: 0.8rem; padding: 0.2rem 0.5rem;">
+                <i class="ph ph-plus"></i> Agregar opción
+            </button>
+        </div>
+    `;
+}
+
+function renderManageProductModifiers(modifiers = []) {
+    if (!manageModGroupsContainer) return;
+    manageModGroupsContainer.innerHTML = '';
+    if (Array.isArray(modifiers) && modifiers.length > 0) {
+        modifiers.forEach(group => {
+            const div = document.createElement('div');
+            div.innerHTML = createModifierGroupCardHtml(group);
+            manageModGroupsContainer.appendChild(div.firstElementChild);
+        });
+    }
+}
+
+function getManageProductModifiers() {
+    if (!manageModGroupsContainer) return [];
+    const groupCards = manageModGroupsContainer.querySelectorAll('.modifier-group-card');
+    const result = [];
+
+    groupCards.forEach(card => {
+        const nameInput = card.querySelector('.mod-group-name-input');
+        const typeSelect = card.querySelector('.mod-group-type-select');
+        const groupName = nameInput ? nameInput.value.trim() : '';
+        const groupType = typeSelect ? typeSelect.value : 'single';
+        const groupId = card.dataset.groupId || `mod_${Date.now()}`;
+
+        if (!groupName) return;
+
+        const optionRows = card.querySelectorAll('.mod-option-row-edit');
+        const options = [];
+
+        optionRows.forEach(row => {
+            const optNameInput = row.querySelector('.mod-opt-name-input');
+            const optPriceInput = row.querySelector('.mod-opt-price-input');
+            const optName = optNameInput ? optNameInput.value.trim() : '';
+            const optPrice = optPriceInput ? (parseFloat(optPriceInput.value) || 0) : 0;
+
+            if (optName) {
+                options.push({
+                    id: `opt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    name: optName,
+                    price: optPrice
+                });
+            }
+        });
+
+        if (options.length > 0) {
+            result.push({
+                id: groupId,
+                name: groupName,
+                type: groupType,
+                options
+            });
+        }
+    });
+
+    return result;
+}
+
 function resetManageProductForm() {
     editingProductId = null;
     manageNameInput.value = '';
     managePriceInput.value = '';
     manageCategoryInput.value = customCategories[0]?.name || '';
     renderManageProductBranchOptions();
+    renderManageProductModifiers([]);
     btnManageSaveProd.textContent = 'Guardar';
 }
 
@@ -1622,14 +1856,15 @@ function saveManagedProduct() {
     const price = parseFloat(managePriceInput.value);
     const category = manageCategoryInput.value;
     const availableInBranches = getSelectedManageProductBranches();
+    const modifiers = getManageProductModifiers();
 
     if (!name || isNaN(price)) return;
 
     if (editingProductId) {
-        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches }, editingProductId);
+        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches, modifiers }, editingProductId);
         showToast("Producto actualizado");
     } else {
-        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches });
+        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches, modifiers });
         showToast("Producto guardado");
     }
 
@@ -1668,6 +1903,7 @@ function startEditingProduct(id) {
     managePriceInput.value = product.price;
     manageCategoryInput.value = product.category;
     renderManageProductBranchOptions(product.availableInBranches || []);
+    renderManageProductModifiers(product.modifiers || []);
     btnManageSaveProd.textContent = 'Actualizar';
     manageForm.style.display = 'block';
     manageNameInput.focus();
@@ -2173,14 +2409,6 @@ function downloadCSV() {
     showToast("Respaldo descargado");
 }
 
-function openExpenseModal() {
-    openModal();
-    const expenseRadio = document.querySelector('input[name="type"][value="expense"]');
-    if (expenseRadio) {
-        expenseRadio.checked = true;
-        toggleFormType('expense');
-    }
-}
 
 function setSaleMobilePanel(panel = 'menu') {
     if (!saleLayout || !saleMobileSwitch) return;
@@ -2229,24 +2457,116 @@ function closeSaleModal() {
     scrollToTop();
 }
 
+function openSaleEditor(transaction) {
+    if (!transaction) return;
+
+    let branchId = transaction.branchId || transaction.branch || '';
+    if (!customBranches.some(b => b.id === branchId)) {
+        const matchingByName = customBranches.find(b => b.name === transaction.zone || b.name === transaction.branch);
+        if (matchingByName) {
+            branchId = matchingByName.id;
+        } else {
+            branchId = customBranches[0]?.id || '';
+        }
+    }
+
+    let items = [];
+    if (Array.isArray(transaction.itemsSoldArray) && transaction.itemsSoldArray.length > 0) {
+        items = transaction.itemsSoldArray.map((item, idx) => {
+            const product = customProducts.find(p => p.id === item.productId || p.name === (item.rawName || item.name));
+            const prodId = item.productId || product?.id || `p_${idx}`;
+            const prodName = item.rawName || product?.name || item.name;
+            const selectedModifiers = Array.isArray(item.modifiers) 
+                ? item.modifiers 
+                : (Array.isArray(item.selectedModifiers) ? item.selectedModifiers : []);
+            const modifierText = item.modifierText || '';
+            const modSignature = selectedModifiers.map(m => `${m.groupName}:${m.optionName}`).sort().join('|');
+            const qty = Number(item.qty) || 1;
+            const price = Number(item.price) || (Number(item.total) / qty) || (product?.price || 0);
+
+            return {
+                id: `item_${prodId}_${Date.now()}_${idx}`,
+                productId: prodId,
+                name: prodName,
+                basePrice: product?.price || price,
+                price,
+                qty,
+                selectedModifiers,
+                modifierText,
+                modSignature
+            };
+        });
+    } else {
+        const legacyItems = getItemsForTransaction(transaction);
+        items = legacyItems.map((item, idx) => {
+            const product = customProducts.find(p => p.name === item.name);
+            const qty = Number(item.qty) || 1;
+            const price = (Number(item.total) / qty) || (product?.price || 0);
+            return {
+                id: `item_${product?.id || idx}_${Date.now()}_${idx}`,
+                productId: product?.id || `p_${idx}`,
+                name: item.name,
+                basePrice: product?.price || price,
+                price,
+                qty,
+                selectedModifiers: [],
+                modifierText: '',
+                modSignature: ''
+            };
+        });
+    }
+
+    activeSaleContext = {
+        mode: 'edit-transaction',
+        transactionId: transaction.id,
+        originalTransaction: transaction
+    };
+
+    saleDraft = createEmptySaleDraft({
+        branchId,
+        items,
+        total: typeof transaction.amount === 'number' ? transaction.amount : getItemsTotal(items)
+    });
+
+    if (saleDateInput) {
+        saleDateInput.value = transaction.date ? getLocalDateInputValue(new Date(transaction.date)) : getLocalDateInputValue();
+    }
+
+    renderSaleBranchOptions();
+    if (saleBranchSelect) saleBranchSelect.value = branchId;
+    saleDraft.branchId = branchId;
+    renderSaleProducts();
+    renderSaleSummary();
+    updateSaleModalMeta();
+    setSaleMobilePanel('menu');
+    saleModal.classList.add('open');
+    scrollToTop();
+}
+
 function updateSaleModalMeta() {
     const branch = getBranchById(saleDraft.branchId);
     const isTableMode = activeSaleContext.mode === 'table';
-
-    saleModalTitle.textContent = isTableMode ? 'Editar Mesa' : 'Registrar Venta';
-    saleModalSubtitle.textContent = isTableMode
-        ? 'Agrega productos, ajusta cantidades y cobra cuando la mesa esté lista.'
-        : 'Selecciona sucursal y arma el pedido.';
-    salePrimaryAction.innerHTML = isTableMode
-        ? '<i class="ph ph-floppy-disk"></i> Guardar Mesa'
-        : `<i class="ph ${branch?.useTables ? 'ph-table' : 'ph-check-circle'}"></i> ${branch?.useTables ? 'Crear Mesa' : 'Guardar Venta'}`;
-    saleCloseTableBtn.style.display = isTableMode ? 'flex' : 'none';
+    const isEditMode = activeSaleContext.mode === 'edit-transaction';
 
     if (isTableMode) {
+        saleModalTitle.textContent = 'Editar Mesa';
+        saleModalSubtitle.textContent = 'Agrega productos, ajusta cantidades y cobra cuando la mesa esté lista.';
+        salePrimaryAction.innerHTML = '<i class="ph ph-floppy-disk"></i> Guardar Mesa';
+        saleCloseTableBtn.style.display = 'flex';
         const table = openTables.find(item => item.id === activeSaleContext.tableId);
         saleTableBanner.style.display = 'block';
         saleTableBanner.innerHTML = `<strong>${table?.name || 'Mesa abierta'}</strong> · ${branch?.name || 'Sucursal'} · ${saleDraft.items.reduce((sum, item) => sum + item.qty, 0)} productos`;
+    } else if (isEditMode) {
+        saleModalTitle.textContent = 'Editar Venta';
+        saleModalSubtitle.textContent = 'Modifica los productos, cantidades o sucursal de esta venta.';
+        salePrimaryAction.innerHTML = '<i class="ph ph-check-circle"></i> Actualizar Venta';
+        saleCloseTableBtn.style.display = 'none';
+        saleTableBanner.style.display = 'none';
     } else {
+        saleModalTitle.textContent = 'Registrar Venta';
+        saleModalSubtitle.textContent = 'Selecciona sucursal y arma el pedido.';
+        salePrimaryAction.innerHTML = `<i class="ph ${branch?.useTables ? 'ph-table' : 'ph-check-circle'}"></i> ${branch?.useTables ? 'Crear Mesa' : 'Guardar Venta'}`;
+        saleCloseTableBtn.style.display = 'none';
         saleTableBanner.style.display = branch?.useTables ? 'block' : 'none';
         saleTableBanner.textContent = branch?.useTables
             ? 'Esta sucursal usa mesas. Al continuar se abrirá una nueva mesa para editar y cobrar después.'
@@ -2280,25 +2600,42 @@ function renderSaleProducts() {
     }
 
     saleProductsGrid.innerHTML = products.map(product => {
-        const draftItem = saleDraft.items.find(item => item.productId === product.id);
-        const qty = draftItem ? draftItem.qty : 0;
+        const hasModifiers = Array.isArray(product.modifiers) && product.modifiers.length > 0;
+        const matchingItems = saleDraft.items.filter(item => item.productId === product.id);
+        const totalQty = matchingItems.reduce((sum, item) => sum + item.qty, 0);
 
         return `
             <article class="sale-product-card">
                 <div class="category">${product.category}</div>
                 <h4>${product.name}</h4>
                 <div class="price">${formatMoney(product.price)}</div>
+                ${hasModifiers ? `<span class="product-mod-badge"><i class="ph ph-sliders"></i> Opciones (${product.modifiers.length})</span>` : ''}
                 
-                ${qty > 0 ? `
-                    <div class="sale-product-controls">
-                        <button type="button" class="qty-btn" data-product-id="${product.id}" data-action="decrease">-</button>
-                        <span class="qty-num">${qty}</span>
-                        <button type="button" class="qty-btn" data-product-id="${product.id}" data-action="increase">+</button>
-                    </div>
+                ${hasModifiers ? `
+                    ${totalQty > 0 ? `
+                        <div style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: auto;">
+                            <span style="font-size: 0.8rem; color: var(--text-muted); text-align: center;">${totalQty} en pedido</span>
+                            <button type="button" class="submit-btn" data-product-id="${product.id}" data-action="customize" style="margin-top: 0; padding: 0.6rem 0.75rem; font-size: 0.85rem;">
+                                <i class="ph ph-plus"></i> Agregar otra
+                            </button>
+                        </div>
+                    ` : `
+                        <button type="button" class="submit-btn" data-product-id="${product.id}" data-action="customize" style="margin-top: auto;">
+                            <i class="ph ph-sliders"></i> Opciones
+                        </button>
+                    `}
                 ` : `
-                    <button type="button" class="submit-btn" data-product-id="${product.id}" data-action="add">
-                        <i class="ph ph-plus"></i> Agregar
-                    </button>
+                    ${totalQty > 0 ? `
+                        <div class="sale-product-controls" style="margin-top: auto;">
+                            <button type="button" class="qty-btn" data-product-id="${product.id}" data-action="decrease">-</button>
+                            <span class="qty-num">${totalQty}</span>
+                            <button type="button" class="qty-btn" data-product-id="${product.id}" data-action="increase">+</button>
+                        </div>
+                    ` : `
+                        <button type="button" class="submit-btn" data-product-id="${product.id}" data-action="add" style="margin-top: auto;">
+                            <i class="ph ph-plus"></i> Agregar
+                        </button>
+                    `}
                 `}
             </article>
         `;
@@ -2324,13 +2661,14 @@ function renderSaleSummary() {
         <div class="sale-order-row">
             <div>
                 <h4>${item.name}</h4>
+                ${item.modifierText ? `<div class="sale-order-modifiers"><i class="ph ph-sliders"></i> ${escapeHtml(item.modifierText)}</div>` : ''}
                 <div class="sale-order-meta">${formatMoney(item.price)} c/u · ${formatMoney(item.price * item.qty)}</div>
             </div>
             <div class="sale-order-controls">
-                <button type="button" data-sale-action="decrease" data-id="${item.productId}">-</button>
+                <button type="button" data-sale-action="decrease" data-id="${item.id || item.productId}">-</button>
                 <span>${item.qty}</span>
-                <button type="button" data-sale-action="increase" data-id="${item.productId}">+</button>
-                <button type="button" class="delete" data-sale-action="remove" data-id="${item.productId}"><i class="ph ph-trash"></i></button>
+                <button type="button" data-sale-action="increase" data-id="${item.id || item.productId}">+</button>
+                <button type="button" class="delete" data-sale-action="remove" data-id="${item.id || item.productId}"><i class="ph ph-trash"></i></button>
             </div>
         </div>
     `).join('');
@@ -2379,19 +2717,150 @@ function persistActiveSaleDraft() {
     });
 }
 
-function addItemToCurrentSale(productId) {
+function openModifiersModal(productId) {
+    const product = customProducts.find(p => p.id === productId);
+    if (!product) return;
+
+    currentModProduct = product;
+    currentModQty = 1;
+
+    if (modModalProdName) modModalProdName.textContent = `Personalizar ${product.name}`;
+    if (modModalProdPrice) modModalProdPrice.textContent = formatMoney(product.price);
+    if (modQtyVal) modQtyVal.textContent = '1';
+
+    if (!modModalBody) return;
+    modModalBody.innerHTML = '';
+
+    const groups = Array.isArray(product.modifiers) ? product.modifiers : [];
+    if (groups.length === 0) {
+        addItemToCurrentSale(productId);
+        return;
+    }
+
+    groups.forEach((group, gIdx) => {
+        const groupSec = document.createElement('div');
+        groupSec.className = 'mod-group-section';
+        const isSingle = group.type === 'single';
+
+        groupSec.innerHTML = `
+            <div class="mod-group-header">
+                <span class="mod-group-title">${escapeHtml(group.name)}</span>
+                <span class="mod-group-tag">${isSingle ? 'Elige 1 opción' : 'Elige una o más opciones'}</span>
+            </div>
+            <div class="mod-options-container">
+                ${group.options.map((opt, oIdx) => `
+                    <label class="mod-option-row">
+                        <input type="${isSingle ? 'radio' : 'checkbox'}" 
+                               name="mod_group_${group.id || gIdx}" 
+                               value="${opt.id || oIdx}" 
+                               data-group-id="${group.id || gIdx}"
+                               data-group-name="${escapeHtml(group.name)}"
+                               data-opt-id="${opt.id || oIdx}"
+                               data-opt-name="${escapeHtml(opt.name)}"
+                               data-opt-price="${opt.price || 0}"
+                               ${isSingle && oIdx === 0 ? 'checked' : ''}>
+                        <div class="mod-option-info">
+                            <span class="mod-opt-name">${escapeHtml(opt.name)}</span>
+                            ${opt.price > 0 ? `<span class="mod-opt-extra">+${formatMoney(opt.price)}</span>` : ''}
+                        </div>
+                    </label>
+                `).join('')}
+            </div>
+        `;
+        modModalBody.appendChild(groupSec);
+    });
+
+    updateModifiersModalTotal();
+    if (modifiersModal) modifiersModal.classList.add('open');
+}
+
+function closeModifiersModal() {
+    if (modifiersModal) modifiersModal.classList.remove('open');
+    currentModProduct = null;
+    currentModQty = 1;
+}
+
+function updateModifiersModalTotal() {
+    if (!currentModProduct || !modModalBody || !modModalTotal) return;
+
+    let extraSum = 0;
+    const checkedInputs = modModalBody.querySelectorAll('input:checked');
+    checkedInputs.forEach(input => {
+        extraSum += (Number(input.dataset.optPrice) || 0);
+    });
+
+    const unitPrice = (Number(currentModProduct.price) || 0) + extraSum;
+    const total = unitPrice * currentModQty;
+    modModalTotal.textContent = formatMoney(total);
+}
+
+function confirmAddProductWithModifiers() {
+    if (!currentModProduct || !modModalBody) return;
+
+    const groups = Array.isArray(currentModProduct.modifiers) ? currentModProduct.modifiers : [];
+    const selectedModifiers = [];
+
+    for (let gIdx = 0; gIdx < groups.length; gIdx++) {
+        const group = groups[gIdx];
+        const isSingle = group.type === 'single';
+        const checked = modModalBody.querySelectorAll(`input[name="mod_group_${group.id || gIdx}"]:checked`);
+        
+        if (isSingle && checked.length === 0 && group.options.length > 0) {
+            showToast(`Selecciona una opción para "${group.name}"`);
+            return;
+        }
+
+        checked.forEach(input => {
+            selectedModifiers.push({
+                groupName: input.dataset.groupName,
+                optionName: input.dataset.optName,
+                price: Number(input.dataset.optPrice) || 0
+            });
+        });
+    }
+
+    const modifierText = selectedModifiers.map(m => m.optionName).join(', ');
+
+    addItemToCurrentSale(currentModProduct.id, {
+        qty: currentModQty,
+        selectedModifiers,
+        modifierText
+    });
+
+    closeModifiersModal();
+}
+
+function addItemToCurrentSale(productId, options = {}) {
     const product = customProducts.find(item => item.id === productId);
     if (!product) return;
 
-    const existing = saleDraft.items.find(item => item.productId === productId);
+    const qty = Number(options.qty) || 1;
+    const selectedModifiers = Array.isArray(options.selectedModifiers) ? options.selectedModifiers : [];
+    const modifierText = options.modifierText || '';
+    const modSignature = options.modSignature || selectedModifiers.map(m => `${m.groupName}:${m.optionName}`).sort().join('|');
+    const extraPrice = selectedModifiers.reduce((sum, m) => sum + (Number(m.price) || 0), 0);
+    const unitPrice = (Number(product.price) || 0) + extraPrice;
+
+    // Check if item with same productId and exact modifier configuration exists
+    const existing = saleDraft.items.find(item => 
+        item.productId === productId && 
+        ((item.modSignature && item.modSignature === modSignature) || 
+         (!item.modSignature && !modSignature && (item.modifierText || '') === modifierText))
+    );
+
     if (existing) {
-        existing.qty += 1;
+        existing.qty += qty;
     } else {
         saleDraft.items.push({
+            id: `item_${product.id}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
             productId: product.id,
             name: product.name,
-            price: Number(product.price) || 0,
-            qty: 1
+            basePrice: product.price,
+            price: unitPrice,
+            qty: qty,
+            selectedModifiers,
+            modifierText,
+            modSignature
         });
     }
 
@@ -2400,13 +2869,31 @@ function addItemToCurrentSale(productId) {
     renderSaleSummary();
     renderSaleProducts();
     if (isStackedSaleLayout()) scrollSaleModalToTop();
-    showToast(`+1 ${product.name}`);
+    showToast(`+${qty} ${product.name}${modifierText ? ` (${modifierText})` : ''}`);
 }
 
-function updateCurrentSaleItemQty(productId, delta) {
-    saleDraft.items = saleDraft.items
-        .map(item => item.productId === productId ? { ...item, qty: item.qty + delta } : item)
-        .filter(item => item.qty > 0);
+function updateCurrentSaleItemQty(itemIdOrProductId, delta) {
+    let targetIndex = saleDraft.items.findIndex(item => item.id === itemIdOrProductId);
+    
+    if (targetIndex === -1) {
+        if (delta < 0) {
+            for (let i = saleDraft.items.length - 1; i >= 0; i--) {
+                if (saleDraft.items[i].productId === itemIdOrProductId) {
+                    targetIndex = i;
+                    break;
+                }
+            }
+        } else {
+            targetIndex = saleDraft.items.findIndex(item => item.productId === itemIdOrProductId);
+        }
+    }
+
+    if (targetIndex === -1) return;
+
+    saleDraft.items[targetIndex].qty += delta;
+    if (saleDraft.items[targetIndex].qty <= 0) {
+        saleDraft.items.splice(targetIndex, 1);
+    }
 
     syncSaleDraftTotal();
     persistActiveSaleDraft();
@@ -2415,8 +2902,18 @@ function updateCurrentSaleItemQty(productId, delta) {
     if (isStackedSaleLayout()) scrollSaleModalToTop();
 }
 
-function removeItemFromCurrentSale(productId) {
-    saleDraft.items = saleDraft.items.filter(item => item.productId !== productId);
+function removeItemFromCurrentSale(itemIdOrProductId) {
+    let targetIndex = saleDraft.items.findIndex(item => item.id === itemIdOrProductId);
+    if (targetIndex === -1) {
+        targetIndex = saleDraft.items.findIndex(item => item.productId === itemIdOrProductId);
+    }
+
+    if (targetIndex !== -1) {
+        saleDraft.items.splice(targetIndex, 1);
+    } else {
+        saleDraft.items = saleDraft.items.filter(item => item.productId !== itemIdOrProductId);
+    }
+
     syncSaleDraftTotal();
     persistActiveSaleDraft();
     renderSaleSummary();
@@ -2435,7 +2932,7 @@ function handleSaleTotalInput() {
 function buildIncomeTransaction({ branchId, items, total, source = 'sale', date = new Date(), tableName = '' }) {
     const branch = getBranchById(branchId);
     const desc = items.length > 0
-        ? items.map(item => `${item.qty}x ${item.name}`).join(', ')
+        ? items.map(item => `${item.qty}x ${item.name}${item.modifierText ? ` (${item.modifierText})` : ''}`).join(', ')
         : 'Venta General';
 
     return {
@@ -2449,10 +2946,13 @@ function buildIncomeTransaction({ branchId, items, total, source = 'sale', date 
         tableName: tableName || '',
         itemsSoldArray: items.map(item => ({
             productId: item.productId,
-            name: item.name,
+            name: item.modifierText ? `${item.name} (${item.modifierText})` : item.name,
+            rawName: item.name,
             qty: Number(item.qty) || 0,
             price: Number(item.price) || 0,
             total: (Number(item.price) || 0) * (Number(item.qty) || 0),
+            modifiers: item.selectedModifiers || [],
+            modifierText: item.modifierText || '',
             category: customProducts.find(product => product.id === item.productId)?.category || ''
         })),
         products: items.map(item => ({ ...item })),
@@ -2483,6 +2983,42 @@ async function handleSalePrimaryAction() {
     }
 
     saleDraft.branchId = branchId;
+
+    if (activeSaleContext.mode === 'edit-transaction' && activeSaleContext.transactionId) {
+        const transactionId = activeSaleContext.transactionId;
+        const orig = activeSaleContext.originalTransaction || {};
+
+        if (saleDraft.total <= 0) {
+            showToast("Agrega productos o un total válido");
+            return;
+        }
+
+        const updatedTx = buildIncomeTransaction({
+            branchId,
+            items: saleDraft.items,
+            total: saleDraft.total,
+            source: orig.source || 'sale',
+            date: createLocalDateFromInput(saleDateInput?.value),
+            tableName: orig.tableName || ''
+        });
+
+        if (db) {
+            if (typeof transactionId === 'string' && !transactionId.startsWith('temp_')) {
+                updateDoc(doc(db, "transactions", transactionId), updatedTx).catch(err => console.error("Error actualizando venta:", err));
+            }
+        }
+
+        transactions = transactions.map(t => t.id === transactionId ? { ...updatedTx, id: transactionId } : t);
+        saveLocalState(STORAGE_KEYS.transactions, transactions);
+        updateDashboard();
+        if (views.transactions.classList.contains('active-view')) {
+            renderFullHistory();
+        }
+
+        showToast("Venta actualizada con éxito");
+        closeSaleModal();
+        return;
+    }
 
     if (branch.useTables && activeSaleContext.mode !== 'table') {
         const table = createTable(branchId, saleDraft.items, saleDraft.total);
@@ -2542,42 +3078,22 @@ function saveOpenTablesState() {
 }
 
 function getTodayTablesCount(branchId = '') {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const isToday = (dStr) => {
-        if (!dStr) return false;
-        try {
-            return new Date(dStr).toISOString().slice(0, 10) === todayStr;
-        } catch (e) {
-            return false;
-        }
-    };
-
-    const openCount = openTables.filter(t => t.status === 'open' && (!branchId || t.branchId === branchId)).length;
-    const closedCount = transactions.filter(t => t.source === 'table' && isToday(t.date) && (!branchId || t.branchId === branchId || t.branch === branchId)).length;
+    const openCount = openTables.filter(t => t.status === 'open' && isSameLocalDate(t.createdAt) && (!branchId || t.branchId === branchId)).length;
+    const closedCount = transactions.filter(t => t.source === 'table' && isSameLocalDate(t.date || t.createdAt) && (!branchId || t.branchId === branchId || t.branch === branchId)).length;
 
     return { open: openCount, closed: closedCount, total: openCount + closedCount };
 }
 
 function getNextTableName(branchId) {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const isToday = (dStr) => {
-        if (!dStr) return false;
-        try {
-            return new Date(dStr).toISOString().slice(0, 10) === todayStr;
-        } catch (e) {
-            return false;
-        }
-    };
-
     const openNums = openTables
-        .filter(table => table.status === 'open' && (!branchId || table.branchId === branchId))
+        .filter(table => table.status === 'open' && isSameLocalDate(table.createdAt) && (!branchId || table.branchId === branchId))
         .map(table => {
             const match = String(table.name || '').match(/Mesa\s+(\d+)/i);
             return match ? Number(match[1]) : 0;
         });
 
     const closedNums = transactions
-        .filter(t => t.source === 'table' && isToday(t.date) && (!branchId || t.branchId === branchId || t.branch === branchId))
+        .filter(t => t.source === 'table' && isSameLocalDate(t.date || t.createdAt) && (!branchId || t.branchId === branchId || t.branch === branchId))
         .map(t => {
             const match = String(t.tableName || t.desc || '').match(/Mesa\s+(\d+)/i);
             return match ? Number(match[1]) : 0;
@@ -2727,7 +3243,7 @@ function renderTablesView() {
                 ${table.items.length > 0
                     ? table.items
                         .slice(0, 4)
-                        .map(item => `<span class="table-card-chip">${item.qty}x ${item.name}</span>`)
+                        .map(item => `<span class="table-card-chip" title="${item.modifierText ? `${item.name} (${item.modifierText})` : item.name}">${item.qty}x ${item.name}${item.modifierText ? ` <small style="color:var(--primary); font-size:0.75rem;">(${item.modifierText})</small>` : ''}</span>`)
                         .join('')
                     : '<span class="table-card-chip empty">Sin productos</span>'}
             </div>
@@ -2767,6 +3283,8 @@ async function closeTable(tableId, date = new Date()) {
 }
 
 function renderExpenseTags() {
+    if (!expenseTagsContainer) return;
+
     expenseTagsContainer.innerHTML = '';
     customExpenseTags.forEach(tag => {
         const btn = document.createElement('button');
@@ -2790,6 +3308,8 @@ function getSelectedExpenseRows() {
 }
 
 function updateSelectedExpensesTotal() {
+    if (!totalSalesAmount) return;
+
     if (selectedExpenseShortcuts.length === 0) {
         totalSalesAmount.readOnly = false;
         return;
@@ -2857,163 +3377,78 @@ function toggleExpenseShortcut(name) {
 
     renderExpenseTags();
     renderSelectedExpenses();
-    toggleFormType('expense');
 }
 
 function resetSelectedExpenses() {
     selectedExpenseShortcuts = [];
     renderExpenseTags();
     renderSelectedExpenses();
-    totalSalesAmount.readOnly = false;
-}
-
-function toggleFormType(type) {
-    if (type === 'income') {
-        extraSalesFields.style.display = 'block';
-        document.getElementById('desc-group').style.display = 'none';
-        document.getElementById('amount-label').textContent = 'Total Editable de la Venta ($)' ;
-        totalSalesAmount.readOnly = false;
-    } else {
-        extraSalesFields.style.display = 'none';
-        document.getElementById('desc-group').style.display = 'block';
-        document.getElementById('amount-label').textContent = selectedExpenseShortcuts.length > 0 ? 'Total de Gastos ($)' : 'Monto del Gasto ($)' ;
-        updateSelectedExpensesTotal();
-    }
-}
-
-function calculateSubtotals() {
-    let total = 0;
-    document.querySelectorAll('.product-qty').forEach(input => {
-        const qty = parseInt(input.value) || 0;
-        const price = parseFloat(input.dataset.price);
-        total += qty * price;
-    });
-    totalSalesAmount.value = total > 0 ? total : '';
+    if (totalSalesAmount) totalSalesAmount.readOnly = false;
 }
 
 function setupDateStr() {
     const today = new Date();
     const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
-    document.getElementById('current-date-display').textContent = today.toLocaleDateString('es-ES', options);
-}
-
-function populateTransactionForm(transaction) {
-    if (!transaction) return;
-
-    const type = transaction.type === 'expense' ? 'expense' : 'income';
-    const selectedType = document.querySelector(`input[name="type"][value="${type}"]`);
-    if (selectedType) {
-        selectedType.checked = true;
-        toggleFormType(type);
-    }
-
-    const date = transaction.date ? new Date(transaction.date) : new Date();
-    if (!isNaN(date.getTime())) {
-        const tzOffset = date.getTimezoneOffset() * 60000;
-        document.getElementById('date').value = new Date(date.getTime() - tzOffset).toISOString().slice(0, 10);
-    }
-
-    totalSalesAmount.value = Number(transaction.amount) || '';
-    document.getElementById('description').value = type === 'expense' ? (transaction.desc || '') : '';
-
-    if (type === 'income') {
-        if (transaction.zone && !customBranches.some(branch => branch.name === transaction.zone)) {
-            const fallbackOption = document.createElement('option');
-            fallbackOption.value = fallbackOption.textContent = transaction.zone;
-            zoneSelect.appendChild(fallbackOption);
-        }
-        zoneSelect.value = transaction.zone || customBranches[0]?.name || '';
-
-        const itemsByName = new Map(
-            getItemsForTransaction(transaction).map(item => [item.name, Number(item.qty) || 0])
-        );
-
-        document.querySelectorAll('.product-qty').forEach(input => {
-            const id = input.id.replace('qty_', '');
-            const product = customProducts.find(prod => prod.id === id);
-            input.value = product ? (itemsByName.get(product.name) || 0) : 0;
-        });
-        calculateSubtotals();
+    const dateDisplay = document.getElementById('current-date-display');
+    if (dateDisplay) {
+        dateDisplay.textContent = today.toLocaleDateString('es-ES', options);
     }
 }
 
-// Firebase CRUD
+// Expense Form Submission
 async function handleFormSubmit(e) {
     e.preventDefault();
-    const type = document.querySelector('input[name="type"]:checked').value;
     const amount = parseFloat(totalSalesAmount.value) || 0;
     const dateVal = document.getElementById('date').value;
-
     const dateObj = createLocalDateFromInput(dateVal);
 
-
-    let desc = "";
-    let category = "";
-    let zone = "";
-    let itemsSold = [];
-    let itemsSoldArray = []; // V3 Data Structure
-
-    if (type === 'income') {
-        document.querySelectorAll('.product-qty').forEach(input => {
-            const qty = parseInt(input.value) || 0;
-            if (qty > 0) {
-                const id = input.id.replace('qty_', '');
-                const p = customProducts.find(prod => prod.id === id);
-                if (p) {
-                    itemsSold.push(`${qty}x ${p.name}`);
-                    itemsSoldArray.push({
-                        name: p.name,
-                        qty: qty,
-                        price: p.price,
-                        total: p.price * qty,
-                        category: p.category
-                    });
-                }
-            }
-        });
-
-        zone = zoneSelect.value || customBranches[0]?.name || '';
-        category = "Venta";
-        desc = itemsSold.length > 0 ? itemsSold.join(', ') : "Venta General";
-    } else {
-        const selectedExpenses = getSelectedExpenseRows();
-        if (selectedExpenses.length > 0) {
-            const invalidExpense = selectedExpenses.find(item => item.amount <= 0);
-            if (invalidExpense) {
-                showToast(`Agrega el costo de ${invalidExpense.name}`);
-                return;
-            }
-
-            if (!db) {
-                showToast("Firebase No Configurado");
-                return;
-            }
-
-            selectedExpenses.forEach(item => {
-                const expenseTx = {
-                    type: 'expense',
-                    amount: item.amount,
-                    desc: item.name,
-                    category: 'Gastos (General)',
-                    zone: '',
-                    itemsSoldArray: [],
-                    date: dateObj.toISOString(),
-                    createdAt: new Date().toISOString()
-                };
-                addDoc(collection(db, "transactions"), expenseTx).catch(err => console.error("Error agregando gasto:", err));
-            });
-
-            showToast(`${selectedExpenses.length} gastos guardados con éxito`);
-            closeModal();
+    const selectedExpenses = getSelectedExpenseRows();
+    if (selectedExpenses.length > 0 && !editingTransactionId) {
+        const invalidExpense = selectedExpenses.find(item => item.amount <= 0);
+        if (invalidExpense) {
+            showToast(`Agrega el costo de ${invalidExpense.name}`);
             return;
         }
 
-        desc = document.getElementById('description').value || "Gasto sin descripción";
-        category = "Gastos (General)";
+        if (!db) {
+            showToast("Firebase No Configurado");
+            return;
+        }
+
+        selectedExpenses.forEach(item => {
+            const expenseTx = {
+                type: 'expense',
+                amount: item.amount,
+                desc: item.name,
+                category: 'Gastos (General)',
+                zone: '',
+                itemsSoldArray: [],
+                date: dateObj.toISOString(),
+                createdAt: new Date().toISOString()
+            };
+            addDoc(collection(db, "transactions"), expenseTx).catch(err => console.error("Error agregando gasto:", err));
+        });
+
+        showToast(`${selectedExpenses.length} gastos guardados con éxito`);
+        closeModal();
+        return;
     }
 
-    const newTx = {
-        type, amount, desc, category, zone, itemsSoldArray, date: dateObj.toISOString(), createdAt: new Date().toISOString()
+    const desc = document.getElementById('description').value.trim() || "Gasto sin descripción";
+    if (amount <= 0) {
+        showToast("Ingresa un monto válido para el gasto");
+        return;
+    }
+
+    const expenseTx = {
+        type: 'expense',
+        amount,
+        desc,
+        category: 'Gastos (General)',
+        zone: '',
+        itemsSoldArray: [],
+        date: dateObj.toISOString(),
+        createdAt: new Date().toISOString()
     };
 
     if (!db) {
@@ -3021,14 +3456,19 @@ async function handleFormSubmit(e) {
         return;
     }
     if (editingTransactionId && !editingTransactionId.startsWith('temp_')) {
-        updateDoc(doc(db, "transactions", editingTransactionId), newTx).catch(err => console.error("Error actualizando:", err));
-        showToast("Registro actualizado con éxito");
+        updateDoc(doc(db, "transactions", editingTransactionId), expenseTx).catch(err => console.error("Error actualizando gasto:", err));
+        transactions = transactions.map(t => t.id === editingTransactionId ? { ...expenseTx, id: editingTransactionId } : t);
+        saveLocalState(STORAGE_KEYS.transactions, transactions);
+        updateDashboard();
+        if (views.transactions.classList.contains('active-view')) renderFullHistory();
+        showToast("Gasto actualizado con éxito");
     } else {
-        addDoc(collection(db, "transactions"), newTx).catch(err => console.error("Error agregando:", err));
-        showToast("Registro guardado con éxito");
+        addDoc(collection(db, "transactions"), expenseTx).catch(err => console.error("Error agregando gasto:", err));
+        showToast("Gasto guardado con éxito");
     }
     closeModal();
 }
+
 function syncStrandedOfflineTransactions() {
     if (!db) return;
     const tempTxs = transactions.filter(t => typeof t.id === 'string' && t.id.startsWith('temp_'));
@@ -3078,7 +3518,11 @@ window.deleteTransaction = async (id) => {
 window.editTransaction = (id) => {
     const transaction = transactions.find(item => item.id === id);
     if (!transaction) return;
-    openModal(transaction);
+    if (transaction.type === 'income') {
+        openSaleEditor(transaction);
+    } else {
+        openExpenseModal(transaction);
+    }
 };
 
 // Data Processing & Rendering
@@ -3645,7 +4089,11 @@ function updateCharts(data) {
     charts.category.update();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}
 
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
