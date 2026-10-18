@@ -24,7 +24,7 @@
     <link rel="stylesheet" href="https://npmcdn.com/flatpickr/dist/themes/dark.css">
 
     <!-- Estilos propios -->
-    <link rel="stylesheet" href="css/styles.css?v=2.1">
+    <link rel="stylesheet" href="css/styles.css?v=2.2.0">
 
     <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
@@ -705,6 +705,22 @@
         </div>
     </div>
 
+    <!-- ===================== Aviso de versión nueva ===================== -->
+    <div class="modal-overlay modal-overlay-update" id="update-modal">
+        <div class="modal update-modal" role="alertdialog" aria-modal="true" aria-labelledby="update-modal-title" aria-describedby="update-modal-text">
+            <div class="update-modal-body">
+                <div class="update-icon"><i class="ph-fill ph-arrow-circle-up"></i></div>
+                <h2 id="update-modal-title">Hay una versión nueva</h2>
+                <p id="update-modal-text">Se publicaron cambios en el dashboard. Actualiza para usar la versión más reciente.</p>
+                <p id="update-modal-versions" class="update-versions"></p>
+            </div>
+            <div class="modal-footer update-modal-footer">
+                <button type="button" class="btn btn-ghost" id="update-modal-dismiss">Ahora no</button>
+                <button type="button" class="btn btn-primary btn-lg" id="update-modal-apply"><i class="ph ph-arrows-clockwise"></i> Actualizar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ===================== Modal: jornada (abrir, reabastecer, corte) ===================== -->
     <div class="modal-overlay" id="session-modal">
         <div class="modal session-modal" role="dialog" aria-modal="true" aria-labelledby="session-modal-title">
@@ -806,6 +822,6 @@
     <script src="https://npmcdn.com/flatpickr/dist/l10n/es.js"></script>
 
     <!-- App -->
-    <script type="module" src="js/app.js?v=2.1"></script>
+    <script type="module" src="js/app.js?v=2.2.0"></script>
 </body>
 </html>

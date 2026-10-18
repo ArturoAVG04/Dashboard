@@ -1164,6 +1164,30 @@ input[type="search"]::-webkit-search-cancel-button { filter: invert(0.7); }
     background-color: var(--surface);
 }
 
+/* Aviso de versión nueva: siempre centrado y por encima de todo */
+.modal-overlay-update { z-index: 2000; }
+
+.update-modal { max-width: 400px; text-align: center; }
+.update-modal-body { padding: var(--space-8) var(--space-6) var(--space-5); }
+
+.update-icon {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto var(--space-4);
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background-color: var(--primary-soft);
+    color: var(--primary-text);
+    font-size: 2.25rem;
+}
+
+.update-modal h2 { font-size: var(--text-xl); font-weight: 700; }
+.update-modal p { margin-top: var(--space-2); color: var(--text-muted); font-size: var(--text-sm); }
+.update-versions { font-size: var(--text-xs) !important; font-variant-numeric: tabular-nums; }
+.update-modal-footer { justify-content: center; }
+.update-modal-footer #update-modal-apply { flex: 1; }
+
 /* Avisos (toast) */
 .toast-container {
     position: fixed;
@@ -3136,12 +3160,12 @@ input[type="search"]::-webkit-search-cancel-button { filter: invert(0.7); }
     .toast-notification { max-width: none; }
 
     /* Modales tipo hoja inferior en celular */
-    .modal-overlay:not(#sale-modal) {
+    .modal-overlay:not(#sale-modal):not(#update-modal) {
         align-items: flex-end;
         padding: 0;
     }
 
-    .modal-overlay:not(#sale-modal) .modal {
+    .modal-overlay:not(#sale-modal):not(#update-modal) .modal {
         max-width: none;
         max-height: 94dvh;
         border-radius: var(--radius-lg) var(--radius-lg) 0 0;

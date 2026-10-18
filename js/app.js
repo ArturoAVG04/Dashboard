@@ -4,6 +4,7 @@ import { STORAGE_KEYS, loadLocalState, saveLocalState } from './config/storage.j
 import { authenticate, isAuthenticated } from './core/auth.js';
 import { getLocalDateInputValue, createLocalDateFromInput, isSameLocalDate } from './core/date-utils.js';
 import { showToast, scrollToTop, initModalScrollLock } from './core/ui-feedback.js';
+import { initUpdateChecker } from './core/app-version.js';
 
 // Services
 import {
@@ -844,6 +845,7 @@ function init() {
     initAuth();
     setupEventListeners();
     initModalScrollLock();
+    initUpdateChecker();
 
     // Initial Subscriptions & Sync
     subscribeProducts(() => {

@@ -57,6 +57,7 @@ TZ=America/Mexico_City node --test tests/*.test.mjs   # pruebas de funciones pur
 
 ## Forma de trabajo acordada
 - Proponer plan y esperar visto bueno antes de cambios grandes.
+- **Cada vez que se publique (commit para desplegar), subir la versión** en `version.json` y en `index.html` (`css/styles.css?v=` y `js/app.js?v=`), las tres iguales (lo verifica `tests/version.test.mjs`). Con eso los dispositivos con una versión vieja ven el aviso centrado "Hay una versión nueva" (`js/core/app-version.js`). `vercel.json` manda `Cache-Control: no-cache` para que el navegador siempre revalide.
 - **Git solo cuando el usuario lo pida** ("haz commit"): trabajar en la rama `Buenaspracticas`, sin crear ramas nuevas. Las credenciales de Firebase ya están configuradas en Vercel: no subir `js/config/firebase-config.js` ni tocar nada de credenciales en git.
 - Migraciones de datos siempre **compatibles hacia atrás** (leer formato viejo, escribir el nuevo), nunca borrar datos históricos.
 
