@@ -1,127 +1,43 @@
-import { escapeHtml, getLocalDateInputValue, createLocalDateFromInput } from '../core/date-utils.js';
-import { showToast, scrollToTop } from '../core/ui-feedback.js';
-import { getCustomProducts, setCustomProducts, getCustomCategories, setCustomCategories, getCustomExpenseTags, setCustomExpenseTags, syncProductsToCloud, syncCategoriesToCloud, syncExpenseTagsToCloud } from '../services/products-service.js';
-import { getCustomBranches, setCustomBranches, syncBranchesToCloud, getBranchById, productAvailableInBranch, hasDuplicateName, sortNamedListAlphabetically } from '../services/branches-service.js';
-import { upsertProduct, removeProductById, moveProductInList, normalizeProduct } from '../models/Product.js';
-import { saveTransaction, updateTransactionRecord } from '../services/transactions-service.js';
+import { escapeHtml, formatMoney } from '../core/date-utils.js';
+import { showToast } from '../core/ui-feedback.js';
+import { getCustomProducts, commitProducts, getCustomCategories, commitCategories } from '../services/products-service.js';
+import { getCustomBranches, commitBranches, getBranchById, productAvailableInBranch, hasDuplicateName, sortNamedListAlphabetically, getStableBranchColor } from '../services/branches-service.js';
+import { upsertProduct, removeProductById, moveProductInList, normalizeProduct, sortProductsForBranch } from '../models/Product.js';
+import { usesSharedModifiers, hasLegacyModifiers, resolveProductModifierGroups, describeModifierGroupRule } from '../models/ModifierGroup.js';
+import { getModifierGroups } from '../services/modifier-groups-service.js';
+import { WEEK_DAYS, getBranchSessionConfig, normalizeSchedule, describeSchedule } from '../models/BranchConfig.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
 
 let editingProductId = null;
 let editingCategoryId = null;
 let editingBranchId = null;
-let editingExpenseTagId = null;
-let editingTransactionId = null;
-let selectedExpenseShortcuts = [];
 
-export function getEditingTransactionId() {
-    return editingTransactionId;
-}
-
-export function setEditingTransactionId(id) {
-    editingTransactionId = id;
-}
-
-export function createModifierOptionRowHtml(opt = { id: '', name: '', price: 0 }) {
-    const optId = opt.id || `opt_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
-    return `
-        <div class="mod-option-row-edit" data-opt-id="${optId}">
-            <input type="text" class="mod-opt-name-input" placeholder="Nombre (ej. Búfalo, BBQ)" value="${escapeHtml(opt.name || '')}" required>
-            <div class="mod-option-price-wrapper">
-                <span>+$</span>
-                <input type="number" class="mod-opt-price-input" placeholder="0" min="0" step="0.5" value="${opt.price || 0}">
-            </div>
-            <button type="button" class="btn-remove-mod-opt" title="Eliminar opción"><i class="ph ph-trash"></i></button>
-        </div>
-    `;
-}
-
-export function createModifierGroupCardHtml(group = { id: '', name: '', type: 'single', options: [] }) {
-    const groupId = group.id || `mod_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
-    const optionsHtml = Array.isArray(group.options) && group.options.length > 0
-        ? group.options.map(opt => createModifierOptionRowHtml(opt)).join('')
-        : createModifierOptionRowHtml();
-
-    return `
-        <div class="modifier-group-card" data-group-id="${groupId}">
-            <div class="mod-group-header">
-                <input type="text" class="mod-group-name-input" placeholder="Nombre del Grupo (ej. Salsas)" value="${escapeHtml(group.name || '')}" required>
-                <div class="mod-group-controls">
-                    <select class="mod-group-type-select">
-                        <option value="single" ${group.type !== 'multiple' ? 'selected' : ''}>🔘 Selección Única (1 opción)</option>
-                        <option value="multiple" ${group.type === 'multiple' ? 'selected' : ''}>☑️ Selección Múltiple (1 o más)</option>
-                    </select>
-                    <button type="button" class="btn-remove-mod-group" title="Eliminar grupo"><i class="ph ph-trash"></i></button>
-                </div>
-            </div>
-            <div class="mod-group-options-list">
-                ${optionsHtml}
-            </div>
-            <button type="button" class="btn-add-mod-option"><i class="ph ph-plus"></i> Agregar Opción</button>
-        </div>
-    `;
-}
-
-export function renderManageProductModifiers(modifiers = []) {
-    const container = document.getElementById('manage-modifier-groups-container');
+// ---------- Modificadores y consumo de inventario en el formulario de producto ----------
+function renderProductModifierChooser(product = null) {
+    const container = document.getElementById('manage-product-modifier-groups');
+    const legacyNotice = document.getElementById('manage-product-legacy-modifiers');
     if (!container) return;
-    container.innerHTML = '';
 
-    if (Array.isArray(modifiers) && modifiers.length > 0) {
-        modifiers.forEach(group => {
-            const div = document.createElement('div');
-            div.innerHTML = createModifierGroupCardHtml(group);
-            container.appendChild(div.firstElementChild);
-        });
+    const groups = getModifierGroups();
+    const selected = new Set(usesSharedModifiers(product) ? product.modifierGroupIds : []);
+    container.innerHTML = groups.length > 0
+        ? groups.map(group => `
+            <label class="check-chip">
+                <input type="checkbox" name="manage_product_modifier" value="${escapeHtml(group.id)}" ${selected.has(group.id) ? 'checked' : ''}>
+                <span>${escapeHtml(group.name)} <small class="muted-text">${escapeHtml(describeModifierGroupRule(group))}</small></span>
+            </label>
+        `).join('')
+        : '<p class="field-hint">Aún no hay modificadores. Créalos en la pestaña Modificadores.</p>';
+
+    if (legacyNotice) {
+        const legacy = product && hasLegacyModifiers(product) ? resolveProductModifierGroups(product, []) : [];
+        legacyNotice.style.display = legacy.length > 0 ? 'flex' : 'none';
+        legacyNotice.innerHTML = legacy.length > 0
+            ? `<i class="ph ph-info"></i><span>Este producto usa modificadores del sistema anterior (${legacy.map(g => escapeHtml(g.name)).join(', ')}). Siguen funcionando; conviértelos desde la pestaña Modificadores. Si eliges modificadores aquí, reemplazarán a los anteriores.</span>`
+            : '';
     }
 }
 
-export function getManageProductModifiers() {
-    const container = document.getElementById('manage-modifier-groups-container');
-    if (!container) return [];
-
-    const cards = container.querySelectorAll('.modifier-group-card');
-    const groups = [];
-
-    cards.forEach((card, gIdx) => {
-        const nameInput = card.querySelector('.mod-group-name-input');
-        const typeSelect = card.querySelector('.mod-group-type-select');
-        const groupName = nameInput?.value?.trim() || '';
-        const groupType = typeSelect?.value === 'multiple' ? 'multiple' : 'single';
-        const groupId = card.dataset.groupId || `mod_${Date.now()}_${gIdx}`;
-
-        if (!groupName) return;
-
-        const optionRows = card.querySelectorAll('.mod-option-row-edit');
-        const options = [];
-
-        optionRows.forEach((row, oIdx) => {
-            const optNameInput = row.querySelector('.mod-opt-name-input');
-            const optPriceInput = row.querySelector('.mod-opt-price-input');
-            const optName = optNameInput?.value?.trim() || '';
-            const optPrice = parseFloat(optPriceInput?.value) || 0;
-            const optId = row.dataset.optId || `opt_${Date.now()}_${oIdx}`;
-
-            if (optName) {
-                options.push({
-                    id: optId,
-                    name: optName,
-                    price: optPrice >= 0 ? optPrice : 0
-                });
-            }
-        });
-
-        if (options.length > 0) {
-            groups.push({
-                id: groupId,
-                name: groupName,
-                type: groupType,
-                options
-            });
-        }
-    });
-
-    return groups;
-}
 
 export function initDragAndDropContainer(container, itemSelector, onReorder) {
     if (!container) return;
@@ -219,7 +135,32 @@ export function initDragAndDropContainer(container, itemSelector, onReorder) {
     });
 }
 
+function getSelectedProductsBranchId() {
+    return document.getElementById('products-branch-filter')?.value || '';
+}
+
+// Guarda el orden propio de una sucursal (solo se escribe el documento de esa sucursal)
+function saveBranchProductOrder(branchId, orderedIds) {
+    saveBranchesState(getCustomBranches().map(branch => branch.id === branchId ? { ...branch, productOrder: orderedIds } : branch));
+    renderManageProducts();
+}
+
+function getBranchOrderedProducts(branchId) {
+    return sortProductsForBranch(getCustomProducts().filter(p => productAvailableInBranch(p, branchId)), getBranchById(branchId));
+}
+
 export function reorderProducts(fromIndex, toIndex, onComplete) {
+    const branchId = getSelectedProductsBranchId();
+    if (branchId) {
+        const ids = getBranchOrderedProducts(branchId).map(product => product.id);
+        if (fromIndex < 0 || fromIndex >= ids.length || toIndex < 0 || toIndex >= ids.length) return;
+        const [moved] = ids.splice(fromIndex, 1);
+        ids.splice(toIndex, 0, moved);
+        saveBranchProductOrder(branchId, ids);
+        if (typeof onComplete === 'function') onComplete();
+        return;
+    }
+
     let customProducts = getCustomProducts();
     if (fromIndex < 0 || fromIndex >= customProducts.length) return;
     if (toIndex < 0 || toIndex >= customProducts.length) return;
@@ -256,17 +197,10 @@ export function sortProductsAlphabetically(onComplete) {
             return;
         }
 
-        const sortedSubset = [...subset].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
-
-        let subIdx = 0;
-        customProducts = customProducts.map(p => {
-            if (productAvailableInBranch(p, selectedBranchId)) {
-                return sortedSubset[subIdx++];
-            }
-            return p;
-        });
-
-        saveProductsState(customProducts);
+        const sortedIds = [...subset]
+            .sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }))
+            .map(product => product.id);
+        saveBranchProductOrder(selectedBranchId, sortedIds);
         showToast(`Productos de ${branchName} ordenados A-Z`);
     } else {
         customProducts = sortNamedListAlphabetically(customProducts);
@@ -288,35 +222,23 @@ export function sortCategoriesAlphabetically(onComplete) {
 export function saveProductsState(products = null) {
     let customProducts = products || getCustomProducts();
     customProducts = customProducts.map((product, index) => ({ ...normalizeProduct(product, index), order: index }));
-    setCustomProducts(customProducts);
+    commitProducts(customProducts);
     renderManageProducts();
-    syncProductsToCloud();
 }
 
 export function saveCategoriesState(categories = null) {
     let customCategories = categories || getCustomCategories();
     customCategories = customCategories.map((cat, index) => ({ ...cat, order: index }));
-    setCustomCategories(customCategories);
+    commitCategories(customCategories);
     renderCategoryOptions();
     renderManageCategories();
-    syncCategoriesToCloud();
 }
 
 export function saveBranchesState(branches = null) {
     let customBranches = branches || getCustomBranches();
-    setCustomBranches(customBranches);
+    commitBranches(customBranches);
     renderManageBranches();
     renderManageProductBranchOptions();
-    syncBranchesToCloud();
-}
-
-export function saveExpenseTagsState(tags = null) {
-    let customExpenseTags = tags || getCustomExpenseTags();
-    customExpenseTags = sortNamedListAlphabetically(customExpenseTags);
-    setCustomExpenseTags(customExpenseTags);
-    renderExpenseTags();
-    renderManageExpenseTags();
-    syncExpenseTagsToCloud();
 }
 
 export function renderCategoryOptions() {
@@ -336,9 +258,9 @@ export function renderManageProductBranchOptions(selected = []) {
     container.innerHTML = customBranches.map(branch => {
         const isChecked = selected.length === 0 || selected.includes(branch.id) || selected.includes(branch.name);
         return `
-            <label class="branch-checkbox-label">
+            <label class="check-chip">
                 <input type="checkbox" name="manage_product_branch" value="${branch.id}" ${isChecked ? 'checked' : ''}>
-                <span>${branch.name}</span>
+                <span>${escapeHtml(branch.name)}</span>
             </label>
         `;
     }).join('');
@@ -377,45 +299,56 @@ export function renderManageProducts() {
 
     const selectedBranchId = productsBranchSelect ? productsBranchSelect.value : '';
 
+    // Con una sucursal elegida el orden es el de esa sucursal; con "Todas" es el orden general
     const filteredProducts = selectedBranchId
-        ? customProducts.filter(p => productAvailableInBranch(p, selectedBranchId))
+        ? sortProductsForBranch(customProducts.filter(p => productAvailableInBranch(p, selectedBranchId)), getBranchById(selectedBranchId))
         : customProducts;
 
+    const orderHint = document.getElementById('products-order-hint');
+    if (orderHint) {
+        orderHint.textContent = selectedBranchId
+            ? `Orden de ${getBranchById(selectedBranchId)?.name || 'la sucursal'}: arrastrar o mover solo cambia esta sucursal.`
+            : 'Orden general: es el que usan las sucursales donde no has acomodado los productos.';
+    }
+
     manageProductsList.innerHTML = '';
-    manageProductsList.className = 'view-products-grid';
+    manageProductsList.className = 'manage-grid';
 
     if (filteredProducts.length === 0) {
-        manageProductsList.innerHTML = `<div class="card" style="grid-column:1/-1; text-align:center; color:var(--text-muted); padding:2rem;">No hay productos registrados ${selectedBranchId ? 'para esta sucursal' : ''}.</div>`;
+        manageProductsList.innerHTML = `<div class="empty-state"><i class="ph ph-hamburger"></i><p>No hay productos registrados${selectedBranchId ? ' para esta sucursal' : ''}.</p></div>`;
         return;
     }
 
-    filteredProducts.forEach((p) => {
-        const realIndex = customProducts.findIndex(item => item.id === p.id);
+    filteredProducts.forEach((p, listIndex) => {
+        const realIndex = selectedBranchId ? listIndex : customProducts.findIndex(item => item.id === p.id);
+        const lastIndex = selectedBranchId ? filteredProducts.length - 1 : customProducts.length - 1;
         const div = document.createElement('div');
         div.className = 'product-manage-card';
         div.setAttribute('draggable', 'true');
         div.setAttribute('data-id', p.id);
         div.setAttribute('data-index', realIndex);
 
+        const branchCount = Array.isArray(p.availableInBranches) ? p.availableInBranches.length : 0;
+        const modifierGroups = resolveProductModifierGroups(p, getModifierGroups());
+        const isLegacy = hasLegacyModifiers(p);
+
         div.innerHTML = `
-            <div style="display:flex; align-items:center; gap:0.5rem; flex-grow:1;">
-                <div class="drag-handle" title="Arrastrar para reordenar">
-                    <i class="ph ph-dots-six-vertical" style="font-size:1.3rem;"></i>
+            <div class="drag-handle" title="Arrastrar para reordenar"><i class="ph ph-dots-six-vertical"></i></div>
+            <div class="manage-card-main">
+                <div class="manage-card-title">${escapeHtml(p.name)} <span class="price-text">${formatMoney(p.price)}</span></div>
+                <div class="manage-card-meta">
+                    <span class="tag">${escapeHtml(p.category || 'Sin categoría')}</span>
+                    <span>${branchCount > 0 ? `${branchCount} sucursal${branchCount === 1 ? '' : 'es'}` : 'Todas las sucursales'}</span>
                 </div>
-                <div style="display:flex; flex-direction:column; gap:0.2rem;">
-                    <button class="btn-icon" data-action="move" data-index="${realIndex}" data-dir="-1" ${realIndex === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
-                    <button class="btn-icon" data-action="move" data-index="${realIndex}" data-dir="1" ${realIndex === customProducts.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
-                </div>
-                <div>
-                    <div style="font-weight: 500;">${p.name} <small style="color:var(--text-muted)">(${p.category || 'Sin categoría'})</small></div>
-                    <div style="color: var(--success); font-size: 0.9rem;">$${p.price}</div>
-                    <div style="color: var(--text-muted); font-size: 0.8rem;">${Array.isArray(p.availableInBranches) && p.availableInBranches.length > 0 ? `${p.availableInBranches.length} sucursales asignadas` : 'Disponible en todas las sucursales'}</div>
-                    ${Array.isArray(p.modifiers) && p.modifiers.length > 0 ? `<div style="color: var(--primary); font-size: 0.8rem; margin-top: 0.2rem;"><i class="ph ph-sliders"></i> ${p.modifiers.length} grupo${p.modifiers.length === 1 ? '' : 's'} de opciones (${p.modifiers.map(g => g.name).join(', ')})</div>` : ''}
-                </div>
+                ${modifierGroups.length > 0 ? `<div class="manage-card-meta manage-card-meta-accent"><i class="ph ph-sliders"></i> ${modifierGroups.map(g => escapeHtml(g.name)).join(', ')}${isLegacy ? ' <span class="tag tag-warning">sistema anterior</span>' : ''}</div>` : ''}
             </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <button class="btn-icon" data-action="edit" data-id="${p.id}"><i class="ph ph-pencil-simple"></i></button>
-                <button class="btn-icon delete" data-action="delete" data-id="${p.id}"><i class="ph ph-trash"></i></button>
+            <div class="manage-card-actions">
+                <div class="reorder-buttons">
+                    <button class="btn-icon btn-icon-sm" data-action="move" data-index="${realIndex}" data-dir="-1" aria-label="Subir" ${realIndex === 0 ? 'disabled' : ''}><i class="ph ph-caret-up"></i></button>
+                    <button class="btn-icon btn-icon-sm" data-action="move" data-index="${realIndex}" data-dir="1" aria-label="Bajar" ${realIndex === lastIndex ? 'disabled' : ''}><i class="ph ph-caret-down"></i></button>
+                </div>
+                <button class="btn-icon" data-action="edit" data-id="${p.id}" aria-label="Editar ${escapeHtml(p.name)}"><i class="ph ph-pencil-simple"></i></button>
+                <button class="btn-icon btn-icon-danger delete" data-action="delete" data-id="${p.id}" aria-label="Eliminar ${escapeHtml(p.name)}"><i class="ph ph-trash"></i></button>
             </div>
         `;
         manageProductsList.appendChild(div);
@@ -435,7 +368,7 @@ export function resetManageProductForm() {
     if (managePriceInput) managePriceInput.value = '';
     if (manageCategoryInput) manageCategoryInput.value = getCustomCategories()[0]?.name || '';
     renderManageProductBranchOptions();
-    renderManageProductModifiers([]);
+    renderProductModifierChooser(null);
     if (btnManageSaveProd) btnManageSaveProd.textContent = 'Guardar';
 }
 
@@ -449,16 +382,28 @@ export function saveManagedProduct() {
     const price = parseFloat(managePriceInput?.value);
     const category = manageCategoryInput?.value || 'General';
     const availableInBranches = getSelectedManageProductBranches();
-    const modifiers = getManageProductModifiers();
 
-    if (!name || isNaN(price)) return;
+    if (!name || isNaN(price)) {
+        showToast("Escribe el nombre y el precio del producto");
+        return;
+    }
 
     let customProducts = getCustomProducts();
+    const original = editingProductId ? customProducts.find(p => p.id === editingProductId) : null;
+    const payload = { name, price, category, availableInBranches };
+
+    // Modificadores: si el producto aún usa el sistema anterior y no se eligió ninguno compartido,
+    // se dejan como están (no se agrega modifierGroupIds para no ocultar los anteriores).
+    const modifierGroupIds = [...document.querySelectorAll('#manage-product-modifier-groups input[name="manage_product_modifier"]:checked')].map(input => input.value);
+    if (!original || usesSharedModifiers(original) || modifierGroupIds.length > 0 || !hasLegacyModifiers(original)) {
+        payload.modifierGroupIds = modifierGroupIds;
+    }
+
     if (editingProductId) {
-        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches, modifiers }, editingProductId);
+        customProducts = upsertProduct(customProducts, payload, editingProductId);
         showToast("Producto actualizado");
     } else {
-        customProducts = upsertProduct(customProducts, { name, price, category, availableInBranches, modifiers });
+        customProducts = upsertProduct(customProducts, payload);
         showToast("Producto guardado");
     }
 
@@ -483,7 +428,7 @@ export function startEditingProduct(id) {
     if (managePriceInput) managePriceInput.value = product.price;
     if (manageCategoryInput) manageCategoryInput.value = product.category;
     renderManageProductBranchOptions(product.availableInBranches || []);
-    renderManageProductModifiers(product.modifiers || []);
+    renderProductModifierChooser(product);
     if (btnManageSaveProd) btnManageSaveProd.textContent = 'Actualizar';
     if (manageForm) manageForm.style.display = 'block';
     if (manageNameInput) manageNameInput.focus();
@@ -503,6 +448,10 @@ export function deleteManagedProduct(id) {
 }
 
 export function moveManagedProduct(index, dir) {
+    if (getSelectedProductsBranchId()) {
+        reorderProducts(index, index + dir);
+        return;
+    }
     let customProducts = getCustomProducts();
     customProducts = moveProductInList(customProducts, index, dir);
     saveProductsState(customProducts);
@@ -514,7 +463,7 @@ export function renderManageCategories() {
 
     const customCategories = getCustomCategories();
     manageCategoriesList.innerHTML = '';
-    manageCategoriesList.className = 'view-products-grid';
+    manageCategoriesList.className = 'manage-grid';
 
     customCategories.forEach((category, index) => {
         const div = document.createElement('div');
@@ -523,23 +472,20 @@ export function renderManageCategories() {
         div.setAttribute('data-id', category.id);
         div.setAttribute('data-index', index);
 
+        const productCount = getCustomProducts().filter(product => product.category === category.name).length;
         div.innerHTML = `
-            <div style="display:flex; align-items:center; gap:0.5rem; flex-grow:1;">
-                <div class="drag-handle" title="Arrastrar para reordenar">
-                    <i class="ph ph-dots-six-vertical" style="font-size:1.3rem;"></i>
-                </div>
-                <div style="display:flex; flex-direction:column; gap:0.2rem;">
-                    <button class="btn-icon" data-action="category-move" data-index="${index}" data-dir="-1" ${index === 0 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-up"></i></button>
-                    <button class="btn-icon" data-action="category-move" data-index="${index}" data-dir="1" ${index === customCategories.length - 1 ? 'disabled style="opacity:0.3"' : ''}><i class="ph ph-caret-down"></i></button>
-                </div>
-                <div>
-                    <div style="font-weight: 500;">${category.name}</div>
-                    <div style="color: var(--text-muted); font-size: 0.85rem;">Categoría disponible</div>
-                </div>
+            <div class="drag-handle" title="Arrastrar para reordenar"><i class="ph ph-dots-six-vertical"></i></div>
+            <div class="manage-card-main">
+                <div class="manage-card-title">${escapeHtml(category.name)}</div>
+                <div class="manage-card-meta">${productCount} producto${productCount === 1 ? '' : 's'}</div>
             </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <button class="btn-icon" data-action="category-edit" data-id="${category.id}"><i class="ph ph-pencil-simple"></i></button>
-                <button class="btn-icon delete" data-action="category-delete" data-id="${category.id}"><i class="ph ph-trash"></i></button>
+            <div class="manage-card-actions">
+                <div class="reorder-buttons">
+                    <button class="btn-icon btn-icon-sm" data-action="category-move" data-index="${index}" data-dir="-1" aria-label="Subir" ${index === 0 ? 'disabled' : ''}><i class="ph ph-caret-up"></i></button>
+                    <button class="btn-icon btn-icon-sm" data-action="category-move" data-index="${index}" data-dir="1" aria-label="Bajar" ${index === customCategories.length - 1 ? 'disabled' : ''}><i class="ph ph-caret-down"></i></button>
+                </div>
+                <button class="btn-icon" data-action="category-edit" data-id="${category.id}" aria-label="Editar ${escapeHtml(category.name)}"><i class="ph ph-pencil-simple"></i></button>
+                <button class="btn-icon btn-icon-danger delete" data-action="category-delete" data-id="${category.id}" aria-label="Eliminar ${escapeHtml(category.name)}"><i class="ph ph-trash"></i></button>
             </div>
         `;
         manageCategoriesList.appendChild(div);
@@ -649,23 +595,101 @@ export function renderManageBranches() {
 
     const customBranches = getCustomBranches();
     manageBranchesList.innerHTML = '';
-    manageBranchesList.className = 'view-products-grid';
+    manageBranchesList.className = 'manage-grid';
 
     customBranches.forEach(branch => {
         const div = document.createElement('div');
         div.className = 'product-manage-card';
         div.innerHTML = `
-            <div>
-                <div style="font-weight: 500;">${branch.name}</div>
-                <div style="color: var(--text-muted); font-size: 0.85rem;">${branch.useTables ? 'Con mesas abiertas' : 'Venta directa'}</div>
+            <span class="branch-color-dot" style="background:${getStableBranchColor(branch)};"></span>
+            <div class="manage-card-main">
+                <div class="manage-card-title">${escapeHtml(branch.name)}</div>
+                <div class="manage-card-meta">
+                    <span class="tag">${branch.useTables ? '<i class="ph ph-table"></i> Con mesas' : '<i class="ph ph-lightning"></i> Venta directa'}</span>
+                    ${branchSessionTags(branch)}
+                </div>
+                ${getBranchSessionConfig(branch).sessionsEnabled && describeSchedule(branch.schedule) ? `<div class="manage-card-meta"><i class="ph ph-clock"></i> ${escapeHtml(describeSchedule(branch.schedule))}</div>` : ''}
             </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <button class="btn-icon" data-action="branch-edit" data-id="${branch.id}"><i class="ph ph-pencil-simple"></i></button>
-                <button class="btn-icon delete" data-action="branch-delete" data-id="${branch.id}"><i class="ph ph-trash"></i></button>
+            <div class="manage-card-actions">
+                <button class="btn-icon" data-action="branch-edit" data-id="${branch.id}" aria-label="Editar ${escapeHtml(branch.name)}"><i class="ph ph-pencil-simple"></i></button>
+                <button class="btn-icon btn-icon-danger delete" data-action="branch-delete" data-id="${branch.id}" aria-label="Eliminar ${escapeHtml(branch.name)}"><i class="ph ph-trash"></i></button>
             </div>
         `;
         manageBranchesList.appendChild(div);
     });
+}
+
+function branchSessionTags(branch) {
+    const config = getBranchSessionConfig(branch);
+    if (!config.sessionsEnabled) return '';
+    return [
+        '<span class="tag"><i class="ph ph-chart-line"></i> Jornadas</span>',
+        config.inventoryEnabled ? '<span class="tag"><i class="ph ph-cube"></i> Inventario</span>' : '',
+        `<span class="tag">${config.openMode === 'schedule' ? '<i class="ph ph-clock"></i> Horario fijo' : '<i class="ph ph-power"></i> Botón'}</span>`
+    ].join('');
+}
+
+// ---------- Configuración de jornadas en el formulario de sucursal ----------
+function renderBranchScheduleEditor(schedule = {}) {
+    const container = document.getElementById('manage-branch-schedule');
+    if (!container) return;
+    const normalized = normalizeSchedule(schedule);
+    container.innerHTML = WEEK_DAYS.map(({ key, label }) => {
+        const day = normalized[key];
+        return `
+            <div class="schedule-row${day ? '' : ' is-off'}" data-day="${key}">
+                <label class="schedule-day">
+                    <input type="checkbox" class="schedule-enabled" ${day ? 'checked' : ''}>
+                    <span>${label}</span>
+                </label>
+                <input type="time" class="schedule-open" value="${day?.open || '13:00'}" aria-label="${label}: abre" ${day ? '' : 'disabled'}>
+                <span class="schedule-sep">a</span>
+                <input type="time" class="schedule-close" value="${day?.close || '21:00'}" aria-label="${label}: cierra" ${day ? '' : 'disabled'}>
+            </div>
+        `;
+    }).join('');
+}
+
+function readBranchSchedule() {
+    const schedule = {};
+    document.querySelectorAll('#manage-branch-schedule .schedule-row').forEach(row => {
+        if (!row.querySelector('.schedule-enabled')?.checked) return;
+        schedule[row.dataset.day] = {
+            open: row.querySelector('.schedule-open')?.value || '',
+            close: row.querySelector('.schedule-close')?.value || ''
+        };
+    });
+    return normalizeSchedule(schedule);
+}
+
+export function handleBranchScheduleChange(event) {
+    const checkbox = event.target.closest('.schedule-enabled');
+    if (!checkbox) return;
+    const row = checkbox.closest('.schedule-row');
+    row.classList.toggle('is-off', !checkbox.checked);
+    row.querySelectorAll('input[type="time"]').forEach(input => { input.disabled = !checkbox.checked; });
+}
+
+export function updateBranchSessionOptions() {
+    const enabled = document.getElementById('manage-branch-sessions')?.checked;
+    const options = document.getElementById('manage-branch-sessions-options');
+    if (options) options.style.display = enabled ? '' : 'none';
+    const mode = document.querySelector('input[name="manage-branch-open-mode"]:checked')?.value;
+    const label = document.getElementById('manage-branch-schedule-label');
+    if (label) label.textContent = mode === 'schedule' ? 'Horario (obligatorio con horario fijo)' : 'Horario (opcional, como referencia y recordatorio)';
+}
+
+function fillBranchSessionFields(branch = null) {
+    const config = getBranchSessionConfig(branch);
+    const sessionsInput = document.getElementById('manage-branch-sessions');
+    const inventoryInput = document.getElementById('manage-branch-inventory');
+    if (sessionsInput) sessionsInput.checked = config.sessionsEnabled;
+    if (inventoryInput) inventoryInput.checked = config.inventoryEnabled;
+    document.querySelectorAll('input[name="manage-branch-open-mode"]').forEach(input => {
+        input.checked = input.value === config.openMode;
+    });
+    renderBranchScheduleEditor(config.schedule);
+    updateBranchSessionOptions();
 }
 
 export function resetManageBranchForm() {
@@ -676,6 +700,7 @@ export function resetManageBranchForm() {
 
     if (manageBranchNameInput) manageBranchNameInput.value = '';
     if (manageBranchUseTables) manageBranchUseTables.checked = false;
+    fillBranchSessionFields(null);
     if (btnManageSaveBranch) btnManageSaveBranch.textContent = 'Guardar';
 }
 
@@ -686,7 +711,22 @@ export function saveManagedBranch() {
 
     const name = manageBranchNameInput?.value.trim() || '';
     const useTables = Boolean(manageBranchUseTables?.checked);
-    if (!name) return;
+    if (!name) {
+        showToast("Escribe el nombre de la sucursal");
+        return;
+    }
+
+    const sessionsEnabled = Boolean(document.getElementById('manage-branch-sessions')?.checked);
+    const sessionConfig = {
+        sessionsEnabled,
+        inventoryEnabled: sessionsEnabled && Boolean(document.getElementById('manage-branch-inventory')?.checked),
+        openMode: document.querySelector('input[name="manage-branch-open-mode"]:checked')?.value === 'schedule' ? 'schedule' : 'manual',
+        schedule: readBranchSchedule()
+    };
+    if (sessionsEnabled && sessionConfig.openMode === 'schedule' && Object.keys(sessionConfig.schedule).length === 0) {
+        showToast("Con horario fijo marca al menos un día con su horario");
+        return;
+    }
 
     let customBranches = getCustomBranches();
     const isEditing = Boolean(editingBranchId);
@@ -697,12 +737,13 @@ export function saveManagedBranch() {
     }
 
     if (editingBranchId) {
-        customBranches = customBranches.map(item => item.id === editingBranchId ? { ...item, name, useTables } : item);
+        customBranches = customBranches.map(item => item.id === editingBranchId ? { ...item, name, useTables, ...sessionConfig } : item);
     } else {
         customBranches.push({
             id: `branch_${Date.now()}`,
             name,
             useTables,
+            ...sessionConfig,
             order: customBranches.length
         });
     }
@@ -726,6 +767,7 @@ export function startEditingBranch(id) {
 
     if (manageBranchNameInput) manageBranchNameInput.value = branch.name;
     if (manageBranchUseTables) manageBranchUseTables.checked = Boolean(branch.useTables);
+    fillBranchSessionFields(branch);
     if (btnManageSaveBranch) btnManageSaveBranch.textContent = 'Actualizar';
     if (manageBranchForm) manageBranchForm.style.display = 'block';
     if (manageBranchNameInput) manageBranchNameInput.focus();
@@ -751,306 +793,4 @@ export function deleteManagedBranch(id) {
         }
         showToast("Sucursal eliminada");
     }
-}
-
-export function renderManageExpenseTags() {
-    const manageExpenseTagsList = document.getElementById('manage-expense-tags-list');
-    if (!manageExpenseTagsList) return;
-
-    const customExpenseTags = getCustomExpenseTags();
-    manageExpenseTagsList.innerHTML = '';
-    manageExpenseTagsList.className = 'view-products-grid';
-
-    customExpenseTags.forEach((tag) => {
-        const div = document.createElement('div');
-        div.className = 'product-manage-card';
-        div.innerHTML = `
-            <div style="display:flex; align-items:center; gap:0.75rem;">
-                <div>
-                    <div style="font-weight: 500;">${tag.name}</div>
-                    <div style="color: var(--text-muted); font-size: 0.85rem;">Atajo de gasto</div>
-                </div>
-            </div>
-            <div style="display:flex; align-items:center; gap:0.5rem;">
-                <button class="btn-icon" data-action="expense-edit" data-id="${tag.id}"><i class="ph ph-pencil-simple"></i></button>
-                <button class="btn-icon delete" data-action="expense-delete" data-id="${tag.id}"><i class="ph ph-trash"></i></button>
-            </div>
-        `;
-        manageExpenseTagsList.appendChild(div);
-    });
-}
-
-export function resetManageExpenseForm() {
-    editingExpenseTagId = null;
-    const manageExpenseNameInput = document.getElementById('manage-exp-name');
-    const btnManageSaveExpense = document.getElementById('manage-save-expense');
-    if (manageExpenseNameInput) manageExpenseNameInput.value = '';
-    if (btnManageSaveExpense) btnManageSaveExpense.textContent = 'Guardar';
-}
-
-export function saveManagedExpenseTag() {
-    const manageExpenseNameInput = document.getElementById('manage-exp-name');
-    const manageExpenseForm = document.getElementById('manage-new-expense-form');
-    const name = manageExpenseNameInput?.value.trim() || '';
-    if (!name) return;
-
-    let customExpenseTags = getCustomExpenseTags();
-    if (hasDuplicateName(customExpenseTags, name, editingExpenseTagId)) {
-        showToast("Ese atajo ya está registrado");
-        return;
-    }
-
-    if (editingExpenseTagId) {
-        customExpenseTags = customExpenseTags.map(tag => tag.id === editingExpenseTagId ? { ...tag, name } : tag);
-        showToast("Acceso actualizado");
-    } else {
-        customExpenseTags.push({ id: `exp_${Date.now()}`, name, order: customExpenseTags.length });
-        showToast("Acceso guardado");
-    }
-
-    saveExpenseTagsState(customExpenseTags);
-    resetManageExpenseForm();
-    if (manageExpenseForm) manageExpenseForm.style.display = 'none';
-}
-
-export function startEditingExpenseTag(id) {
-    const customExpenseTags = getCustomExpenseTags();
-    const tag = customExpenseTags.find(item => item.id === id);
-    if (!tag) return;
-
-    editingExpenseTagId = id;
-    const manageExpenseNameInput = document.getElementById('manage-exp-name');
-    const btnManageSaveExpense = document.getElementById('manage-save-expense');
-    const manageExpenseForm = document.getElementById('manage-new-expense-form');
-
-    if (manageExpenseNameInput) manageExpenseNameInput.value = tag.name;
-    if (btnManageSaveExpense) btnManageSaveExpense.textContent = 'Actualizar';
-    if (manageExpenseForm) manageExpenseForm.style.display = 'block';
-    if (manageExpenseNameInput) manageExpenseNameInput.focus();
-}
-
-export function deleteManagedExpenseTag(id) {
-    if (confirm("¿Estás seguro de que quieres eliminar este acceso de gasto?")) {
-        let customExpenseTags = getCustomExpenseTags();
-        customExpenseTags = customExpenseTags.filter(tag => tag.id !== id);
-        if (editingExpenseTagId === id) {
-            resetManageExpenseForm();
-            const manageExpenseForm = document.getElementById('manage-new-expense-form');
-            if (manageExpenseForm) manageExpenseForm.style.display = 'none';
-        }
-        saveExpenseTagsState(customExpenseTags);
-    }
-}
-
-export function renderExpenseTags() {
-    const expenseTagsContainer = document.getElementById('expense-tags-container');
-    if (!expenseTagsContainer) return;
-
-    const customExpenseTags = getCustomExpenseTags();
-    expenseTagsContainer.innerHTML = '';
-    customExpenseTags.forEach(tag => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = `expense-tag${selectedExpenseShortcuts.includes(tag.name) ? ' active' : ''}`;
-        btn.textContent = tag.name;
-        btn.addEventListener('click', () => toggleExpenseShortcut(tag.name));
-        expenseTagsContainer.appendChild(btn);
-    });
-}
-
-export function getSelectedExpenseRows() {
-    const selectedExpensesContainer = document.getElementById('selected-expenses-container');
-    const inputs = Array.from(selectedExpensesContainer?.querySelectorAll('.selected-expense-amount') || []);
-    return selectedExpenseShortcuts.map(name => {
-        const input = inputs.find(item => item.dataset.expenseName === name);
-        return {
-            name,
-            amount: parseFloat(input?.value) || 0
-        };
-    });
-}
-
-export function updateSelectedExpensesTotal() {
-    const totalSalesAmount = document.getElementById('amount');
-    if (!totalSalesAmount) return;
-
-    if (selectedExpenseShortcuts.length === 0) {
-        totalSalesAmount.readOnly = false;
-        return;
-    }
-
-    const total = getSelectedExpenseRows().reduce((sum, item) => sum + item.amount, 0);
-    totalSalesAmount.value = total > 0 ? total : '';
-    totalSalesAmount.readOnly = true;
-}
-
-export function renderSelectedExpenses() {
-    const selectedExpensesContainer = document.getElementById('selected-expenses-container');
-    if (!selectedExpensesContainer) return;
-    const previousRows = getSelectedExpenseRows();
-    const previousAmounts = new Map(previousRows.map(item => [item.name, item.amount]));
-
-    if (selectedExpenseShortcuts.length === 0) {
-        selectedExpensesContainer.style.display = 'none';
-        selectedExpensesContainer.innerHTML = '';
-        updateSelectedExpensesTotal();
-        return;
-    }
-
-    selectedExpensesContainer.style.display = 'grid';
-    selectedExpensesContainer.innerHTML = '';
-
-    selectedExpenseShortcuts.forEach(name => {
-        const row = document.createElement('div');
-        row.className = 'selected-expense-row';
-
-        const label = document.createElement('div');
-        label.className = 'selected-expense-name';
-        label.textContent = name;
-
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.className = 'selected-expense-amount';
-        input.dataset.expenseName = name;
-        input.min = '0';
-        input.step = '0.5';
-        input.placeholder = 'Costo';
-        input.required = true;
-        const previousAmount = previousAmounts.get(name);
-        if (previousAmount > 0) input.value = String(previousAmount);
-
-        row.append(label, input);
-        selectedExpensesContainer.appendChild(row);
-    });
-
-    selectedExpensesContainer.querySelectorAll('.selected-expense-amount').forEach(input => {
-        input.addEventListener('input', updateSelectedExpensesTotal);
-    });
-    updateSelectedExpensesTotal();
-}
-
-export function toggleExpenseShortcut(name) {
-    if (editingTransactionId) {
-        showToast("En edición usa la descripción y el monto del registro actual");
-        return;
-    }
-
-    const exists = selectedExpenseShortcuts.includes(name);
-    selectedExpenseShortcuts = exists
-        ? selectedExpenseShortcuts.filter(item => item !== name)
-        : [...selectedExpenseShortcuts, name];
-
-    renderExpenseTags();
-    renderSelectedExpenses();
-}
-
-export function resetSelectedExpenses() {
-    selectedExpenseShortcuts = [];
-    renderExpenseTags();
-    renderSelectedExpenses();
-    const totalSalesAmount = document.getElementById('amount');
-    if (totalSalesAmount) totalSalesAmount.readOnly = false;
-}
-
-export function openExpenseModal(transaction = null) {
-    const modal = document.getElementById('transaction-modal');
-    const title = document.getElementById('transaction-modal-title');
-    const descInput = document.getElementById('description');
-    const amountInput = document.getElementById('amount');
-    const dateInput = document.getElementById('date');
-    const expenseForm = document.getElementById('transaction-form');
-
-    if (!modal) return;
-    if (expenseForm) expenseForm.reset();
-    resetSelectedExpenses();
-
-    if (transaction) {
-        editingTransactionId = transaction.id;
-        if (title) title.textContent = "Editar Gasto";
-        if (descInput) descInput.value = transaction.desc || '';
-        if (amountInput) amountInput.value = transaction.amount || '';
-        if (dateInput) dateInput.value = transaction.date ? getLocalDateInputValue(new Date(transaction.date)) : getLocalDateInputValue();
-    } else {
-        editingTransactionId = null;
-        if (title) title.textContent = "Registrar Gasto";
-        if (dateInput) dateInput.value = getLocalDateInputValue();
-    }
-
-    modal.classList.add('open');
-    scrollToTop();
-}
-
-export function closeModal() {
-    const modal = document.getElementById('transaction-modal');
-    if (modal) modal.classList.remove('open');
-    editingTransactionId = null;
-    resetSelectedExpenses();
-    scrollToTop();
-}
-
-export async function handleExpenseFormSubmit(e, { onUpdate } = {}) {
-    e.preventDefault();
-    const amountInput = document.getElementById('amount');
-    const dateInput = document.getElementById('date');
-    const descInput = document.getElementById('description');
-
-    const amount = parseFloat(amountInput?.value) || 0;
-    const dateVal = dateInput?.value || '';
-    const dateObj = createLocalDateFromInput(dateVal);
-
-    const selectedExpenses = getSelectedExpenseRows();
-    if (selectedExpenses.length > 0 && !editingTransactionId) {
-        const invalidExpense = selectedExpenses.find(item => item.amount <= 0);
-        if (invalidExpense) {
-            showToast(`Agrega el costo de ${invalidExpense.name}`);
-            return;
-        }
-
-        for (const item of selectedExpenses) {
-            const expenseTx = {
-                type: 'expense',
-                amount: item.amount,
-                desc: item.name,
-                category: 'Gastos (General)',
-                zone: '',
-                itemsSoldArray: [],
-                date: dateObj.toISOString(),
-                createdAt: new Date().toISOString()
-            };
-            await saveTransaction(expenseTx);
-        }
-
-        showToast(`${selectedExpenses.length} gastos guardados con éxito`);
-        closeModal();
-        if (typeof onUpdate === 'function') onUpdate();
-        return;
-    }
-
-    const desc = descInput?.value.trim() || "Gasto sin descripción";
-    if (amount <= 0) {
-        showToast("Ingresa un monto válido para el gasto");
-        return;
-    }
-
-    const expenseTx = {
-        type: 'expense',
-        amount,
-        desc,
-        category: 'Gastos (General)',
-        zone: '',
-        itemsSoldArray: [],
-        date: dateObj.toISOString(),
-        createdAt: new Date().toISOString()
-    };
-
-    if (editingTransactionId) {
-        await updateTransactionRecord(editingTransactionId, expenseTx);
-        showToast("Gasto actualizado con éxito");
-    } else {
-        await saveTransaction(expenseTx);
-        showToast("Gasto guardado con éxito");
-    }
-
-    closeModal();
-    if (typeof onUpdate === 'function') onUpdate();
 }

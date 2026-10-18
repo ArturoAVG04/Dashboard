@@ -1,4 +1,4 @@
-import { formatMoney } from '../core/date-utils.js';
+import { formatMoney, escapeHtml, formatTimeDisplay } from '../core/date-utils.js';
 import { getOpenTables, getTodayTablesCount, deleteTable } from '../services/tables-service.js';
 import { getCustomBranches, getBranchNameById } from '../services/branches-service.js';
 
@@ -38,16 +38,21 @@ export function renderTablesView(transactions = []) {
     const filteredTables = branchId ? allTables.filter(t => t.branchId === branchId) : allTables;
 
     if (filteredTables.length === 0) {
-        tablesGrid.innerHTML = `<div class="card" style="grid-column:1/-1; text-align:center; color:var(--text-muted);">No hay mesas abiertas${branchId ? ' en esta sucursal' : ''}.</div>`;
+        tablesGrid.innerHTML = `<div class="empty-state"><i class="ph ph-table"></i><p>No hay mesas abiertas${branchId ? ' en esta sucursal' : ''}.</p><small>Las mesas se crean al registrar una venta en una sucursal con mesas.</small></div>`;
         return;
     }
 
-    tablesGrid.innerHTML = filteredTables.map(table => `
+    tablesGrid.innerHTML = filteredTables.map(table => {
+        const itemCount = table.items.reduce((sum, item) => sum + item.qty, 0);
+        const hiddenCount = Math.max(0, table.items.length - 4);
+        const openedAt = new Date(table.createdAt);
+        const openedText = isNaN(openedAt.getTime()) ? '' : ` · desde ${formatTimeDisplay(openedAt)}`;
+        return `
         <article class="table-card">
             <div class="table-card-top">
                 <div>
-                    <div class="table-card-title">${table.name}</div>
-                    <div class="table-card-subtitle">${getBranchNameById(table.branchId)} · ${table.items.reduce((sum, item) => sum + item.qty, 0)} productos</div>
+                    <div class="table-card-title">${escapeHtml(table.name)}</div>
+                    <div class="table-card-subtitle">${escapeHtml(getBranchNameById(table.branchId))} · ${itemCount} producto${itemCount === 1 ? '' : 's'}${openedText}</div>
                 </div>
                 <div class="table-card-total">${formatMoney(table.total)}</div>
             </div>
@@ -55,15 +60,16 @@ export function renderTablesView(transactions = []) {
                 ${table.items.length > 0
                     ? table.items
                         .slice(0, 4)
-                        .map(item => `<span class="table-card-chip" title="${item.modifierText ? `${item.name} (${item.modifierText})` : item.name}">${item.qty}x ${item.name}${item.modifierText ? ` <small style="color:var(--primary); font-size:0.75rem;">(${item.modifierText})</small>` : ''}</span>`)
-                        .join('')
+                        .map(item => `<span class="table-card-chip" title="${escapeHtml(item.modifierText ? `${item.name} (${item.modifierText})` : item.name)}"><strong>${item.qty}×</strong> ${escapeHtml(item.name)}${item.modifierText ? ` <small>(${escapeHtml(item.modifierText)})</small>` : ''}</span>`)
+                        .join('') + (hiddenCount > 0 ? `<span class="table-card-chip empty">+${hiddenCount} más</span>` : '')
                     : '<span class="table-card-chip empty">Sin productos</span>'}
             </div>
             <div class="table-card-actions">
-                <button type="button" class="submit-btn" data-table-action="edit" data-id="${table.id}"><i class="ph ph-pencil-simple"></i> Editar</button>
-                <button type="button" class="submit-btn" style="background: var(--success);" data-table-action="charge" data-id="${table.id}"><i class="ph ph-currency-circle-dollar"></i> Cobrar</button>
-                <button type="button" class="submit-btn" style="background: var(--danger);" data-table-action="delete" data-id="${table.id}"><i class="ph ph-trash"></i> Eliminar</button>
+                <button type="button" class="btn btn-success" data-table-action="charge" data-id="${table.id}"><i class="ph ph-currency-circle-dollar"></i> Cobrar</button>
+                <button type="button" class="btn btn-secondary" data-table-action="edit" data-id="${table.id}"><i class="ph ph-pencil-simple"></i> Editar</button>
+                <button type="button" class="btn-icon btn-icon-danger" data-table-action="delete" data-id="${table.id}" aria-label="Eliminar ${escapeHtml(table.name)}" title="Eliminar mesa"><i class="ph ph-trash"></i></button>
             </div>
         </article>
-    `).join('');
+    `;
+    }).join('');
 }

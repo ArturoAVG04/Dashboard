@@ -1,28 +1,62 @@
 import { db } from '../config/firebase-config.js';
-import { collection, onSnapshot, query, orderBy, getDocs, writeBatch, doc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { collection, onSnapshot, query, orderBy, doc, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
 import { INITIAL_PRODUCTS, INITIAL_EXPENSE_TAGS, INITIAL_CATEGORIES } from '../config/constants.js';
 import { normalizeProducts } from '../models/Product.js';
 import { normalizeNamedList, sortNamedListAlphabetically } from './branches-service.js';
+import { commitListChanges, uploadList } from './firestore-sync.js';
+
+const PRODUCTS_COLLECTION = 'dashboard_products';
+const CATEGORIES_COLLECTION = 'dashboard_categories';
+const EXPENSE_TAGS_COLLECTION = 'dashboard_expense_tags';
 
 let customProducts = normalizeProducts(loadLocalState(STORAGE_KEYS.products, INITIAL_PRODUCTS));
 let customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(loadLocalState(STORAGE_KEYS.expenseTags, INITIAL_EXPENSE_TAGS)));
 let customCategories = normalizeNamedList(loadLocalState(STORAGE_KEYS.categories, INITIAL_CATEGORIES), 'cat').sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
 
-let isSyncingProducts = false;
-let isSyncingExpenseTags = false;
-let isSyncingCategories = false;
+// Campos que la app guarda en Firestore para cada tipo de documento
+export function productToDoc(product, index) {
+    return {
+        name: product.name,
+        price: Number(product.price) || 0,
+        category: product.category || 'General',
+        availableInBranches: Array.isArray(product.availableInBranches) ? product.availableInBranches : [],
+        modifiers: Array.isArray(product.modifiers) ? product.modifiers : [],
+        order: typeof product.order === 'number' ? product.order : index,
+        // Campos nuevos (F3/F4): solo se escriben si el producto ya los usa, para no alterar productos sin configurar
+        ...(Array.isArray(product.modifierGroupIds) ? { modifierGroupIds: product.modifierGroupIds } : {}),
+        ...(Array.isArray(product.stockUsage) ? { stockUsage: product.stockUsage } : {})
+    };
+}
 
+export function categoryToDoc(category, index) {
+    return {
+        name: category.name,
+        order: typeof category.order === 'number' ? category.order : index
+    };
+}
+
+export function expenseTagToDoc(tag, index) {
+    return {
+        name: tag.name,
+        order: typeof tag.order === 'number' ? tag.order : index,
+        groupId: tag.groupId || ''
+    };
+}
+
+// Conserva campos desconocidos del documento (compatibilidad hacia adelante)
 export function normalizeExpenseTags(tags) {
     return (tags || []).map((tag, index) => {
         if (typeof tag === 'string') {
-            return { id: `exp_${index}_${tag.toLowerCase().replace(/\s+/g, '_')}`, name: tag, order: index };
+            return { id: `exp_${index}_${tag.toLowerCase().replace(/\s+/g, '_')}`, name: tag, order: index, groupId: '' };
         }
 
         return {
+            ...tag,
             id: tag.id || `exp_${index}_${(tag.name || '').toLowerCase().replace(/\s+/g, '_')}`,
             name: tag.name || '',
-            order: typeof tag.order === 'number' ? tag.order : index
+            order: typeof tag.order === 'number' ? tag.order : index,
+            groupId: tag.groupId || ''
         };
     }).filter(tag => tag.name);
 }
@@ -31,140 +65,75 @@ export function getCustomProducts() {
     return customProducts;
 }
 
-export function setCustomProducts(products) {
-    customProducts = products;
-    saveLocalState(STORAGE_KEYS.products, customProducts);
-}
-
 export function getCustomExpenseTags() {
     return customExpenseTags;
-}
-
-export function setCustomExpenseTags(tags) {
-    customExpenseTags = tags;
-    saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
 }
 
 export function getCustomCategories() {
     return customCategories;
 }
 
-export function setCustomCategories(categories) {
+// Reemplaza la lista local y guarda en Firestore solo los productos que cambiaron
+export function commitProducts(products) {
+    const previous = customProducts;
+    customProducts = products;
+    saveLocalState(STORAGE_KEYS.products, customProducts);
+    return commitListChanges(PRODUCTS_COLLECTION, previous, customProducts, productToDoc);
+}
+
+export function commitCategories(categories) {
+    const previous = customCategories;
     customCategories = categories;
     saveLocalState(STORAGE_KEYS.categories, customCategories);
+    return commitListChanges(CATEGORIES_COLLECTION, previous, customCategories, categoryToDoc);
 }
 
-export async function syncProductsToCloud() {
-    if (!db || isSyncingProducts) return;
+// Guardado por documento: solo toca el atajo editado
+export async function upsertExpenseTag(tag) {
+    const normalized = normalizeExpenseTags([tag])[0];
+    if (!normalized) return null;
 
-    isSyncingProducts = true;
-    try {
-        const collectionRef = collection(db, "dashboard_products");
-        const existingSnapshot = await getDocs(collectionRef);
-        const batch = writeBatch(db);
+    const exists = customExpenseTags.some(item => item.id === normalized.id);
+    customExpenseTags = sortNamedListAlphabetically(exists
+        ? customExpenseTags.map(item => item.id === normalized.id ? { ...item, ...normalized } : item)
+        : [...customExpenseTags, normalized]);
+    saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
 
-        existingSnapshot.forEach((docItem) => {
-            batch.delete(docItem.ref);
-        });
+    if (db) {
+        try {
+            await setDoc(doc(db, EXPENSE_TAGS_COLLECTION, normalized.id), expenseTagToDoc(normalized, 0), { merge: true });
+        } catch (error) {
+            console.warn("No se pudo guardar el atajo de gasto:", error);
+        }
+    }
+    return normalized;
+}
 
-        customProducts.forEach((product, index) => {
-            if (product && product.name) {
-                const docRef = doc(collection(db, "dashboard_products"), product.id || `p_${index}`);
-                batch.set(docRef, {
-                    name: product.name,
-                    price: Number(product.price) || 0,
-                    category: product.category || 'General',
-                    availableInBranches: Array.isArray(product.availableInBranches) ? product.availableInBranches : [],
-                    modifiers: Array.isArray(product.modifiers) ? product.modifiers : [],
-                    order: typeof product.order === 'number' ? product.order : index
-                });
-            }
-        });
+export async function removeExpenseTag(id) {
+    customExpenseTags = customExpenseTags.filter(tag => tag.id !== id);
+    saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
 
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar los productos:", error);
-    } finally {
-        isSyncingProducts = false;
+    if (db) {
+        try {
+            await deleteDoc(doc(db, EXPENSE_TAGS_COLLECTION, id));
+        } catch (error) {
+            console.warn("No se pudo eliminar el atajo de gasto:", error);
+        }
     }
 }
 
-export async function syncExpenseTagsToCloud() {
-    if (!db || isSyncingExpenseTags) return;
-
-    isSyncingExpenseTags = true;
-    try {
-        const collectionRef = collection(db, "dashboard_expense_tags");
-        const existingSnapshot = await getDocs(collectionRef);
-        const batch = writeBatch(db);
-
-        existingSnapshot.forEach((docItem) => {
-            batch.delete(docItem.ref);
-        });
-
-        customExpenseTags.forEach((tag, index) => {
-            if (tag && tag.name) {
-                const docRef = doc(collection(db, "dashboard_expense_tags"), tag.id || `exp_${index}`);
-                batch.set(docRef, {
-                    name: tag.name,
-                    order: typeof tag.order === 'number' ? tag.order : index
-                });
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar los accesos de gasto:", error);
-    } finally {
-        isSyncingExpenseTags = false;
-    }
-}
-
-export async function syncCategoriesToCloud() {
-    if (!db || isSyncingCategories) return;
-
-    isSyncingCategories = true;
-    try {
-        const collectionRef = collection(db, "dashboard_categories");
-        const existingSnapshot = await getDocs(collectionRef);
-        const batch = writeBatch(db);
-
-        existingSnapshot.forEach((docItem) => {
-            batch.delete(docItem.ref);
-        });
-
-        customCategories.forEach((category, index) => {
-            if (category && category.name) {
-                const docRef = doc(collection(db, "dashboard_categories"), category.id || `cat_${index}`);
-                batch.set(docRef, {
-                    name: category.name,
-                    order: typeof category.order === 'number' ? category.order : index
-                });
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar las categorías:", error);
-    } finally {
-        isSyncingCategories = false;
-    }
-}
-
+// En las suscripciones: si la colección está vacía en la nube (primer uso), se sube lo local sin borrar nada.
 export function subscribeProducts(callback) {
     if (!db) return;
 
-    const productsQuery = query(collection(db, "dashboard_products"), orderBy("order", "asc"));
+    const productsQuery = query(collection(db, PRODUCTS_COLLECTION), orderBy("order", "asc"));
     onSnapshot(productsQuery, async (snapshot) => {
         if (snapshot.empty) {
-            await syncProductsToCloud();
+            await uploadList(PRODUCTS_COLLECTION, customProducts, productToDoc);
             return;
         }
 
-        customProducts = snapshot.docs.map(item => ({
-            ...item.data(),
-            id: item.id
-        })).map((product, index) => normalizeProducts([product])[0]);
+        customProducts = normalizeProducts(snapshot.docs.map(item => ({ ...item.data(), id: item.id })));
         saveLocalState(STORAGE_KEYS.products, customProducts);
         if (typeof callback === 'function') callback(customProducts);
     }, (error) => {
@@ -175,17 +144,14 @@ export function subscribeProducts(callback) {
 export function subscribeExpenseTags(callback) {
     if (!db) return;
 
-    const tagsQuery = query(collection(db, "dashboard_expense_tags"), orderBy("order", "asc"));
+    const tagsQuery = query(collection(db, EXPENSE_TAGS_COLLECTION), orderBy("order", "asc"));
     onSnapshot(tagsQuery, async (snapshot) => {
         if (snapshot.empty) {
-            await syncExpenseTagsToCloud();
+            await uploadList(EXPENSE_TAGS_COLLECTION, customExpenseTags, expenseTagToDoc);
             return;
         }
 
-        customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(snapshot.docs.map(item => ({
-            ...item.data(),
-            id: item.id
-        }))));
+        customExpenseTags = sortNamedListAlphabetically(normalizeExpenseTags(snapshot.docs.map(item => ({ ...item.data(), id: item.id }))));
         saveLocalState(STORAGE_KEYS.expenseTags, customExpenseTags);
         if (typeof callback === 'function') callback(customExpenseTags);
     }, (error) => {
@@ -196,17 +162,14 @@ export function subscribeExpenseTags(callback) {
 export function subscribeCategories(callback) {
     if (!db) return;
 
-    const categoriesQuery = query(collection(db, "dashboard_categories"), orderBy("order", "asc"));
+    const categoriesQuery = query(collection(db, CATEGORIES_COLLECTION), orderBy("order", "asc"));
     onSnapshot(categoriesQuery, async (snapshot) => {
         if (snapshot.empty) {
-            await syncCategoriesToCloud();
+            await uploadList(CATEGORIES_COLLECTION, customCategories, categoryToDoc);
             return;
         }
 
-        const normalizedCats = normalizeNamedList(snapshot.docs.map(item => ({
-            ...item.data(),
-            id: item.id
-        })), 'cat');
+        const normalizedCats = normalizeNamedList(snapshot.docs.map(item => ({ ...item.data(), id: item.id })), 'cat');
         customCategories = [...normalizedCats].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
         saveLocalState(STORAGE_KEYS.categories, customCategories);
         if (typeof callback === 'function') callback(customCategories);

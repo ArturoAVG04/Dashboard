@@ -64,3 +64,48 @@ export function toTitleCase(value) {
         .map(word => word.charAt(0).toUpperCase() + word.slice(1))
         .join(' ');
 }
+
+export function getLocalTimeInputValue(date = new Date()) {
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+}
+
+// Combina "YYYY-MM-DD" + "HH:MM" en una fecha local. Devuelve null si falta la hora.
+export function combineLocalDateAndTime(dateValue, timeValue) {
+    if (!timeValue) return null;
+    const [hh, min] = timeValue.split(':').map(Number);
+    if (!Number.isFinite(hh) || !Number.isFinite(min)) return null;
+
+    const date = createLocalDateFromInput(dateValue);
+    date.setHours(hh, min, 0, 0);
+    return date;
+}
+
+function parseValidDate(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    return isNaN(date.getTime()) ? null : date;
+}
+
+// Hora real de una venta. Ventas viejas (sin soldAt) usan createdAt si cae el mismo día;
+// si no, la hora se marca como estimada y no debe usarse en métricas por hora.
+export function getSaleTimestamp(transaction) {
+    const soldAt = parseValidDate(transaction?.soldAt);
+    if (soldAt) return { date: soldAt, estimated: false };
+
+    const date = parseValidDate(transaction?.date);
+    if (transaction?.timeEstimated) return { date, estimated: true };
+
+    const createdAt = parseValidDate(transaction?.createdAt);
+    if (createdAt && (!date || isSameLocalDate(createdAt, date))) {
+        return { date: createdAt, estimated: false };
+    }
+
+    return { date: date || createdAt, estimated: true };
+}
+
+export function formatTimeDisplay(date) {
+    if (!date || isNaN(date.getTime())) return '';
+    return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false });
+}

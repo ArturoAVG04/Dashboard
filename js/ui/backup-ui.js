@@ -1,4 +1,5 @@
-import { formatMoney } from '../core/date-utils.js';
+import { formatMoney, getSaleTimestamp, formatTimeDisplay } from '../core/date-utils.js';
+import { buildFullBackup } from '../services/backup-service.js';
 
 export function formatExportDate(dateValue) {
     if (!dateValue) return 'Sin fecha';
@@ -116,18 +117,20 @@ export function downloadCSV(data, filterName = 'periodo', notify) {
         return;
     }
 
-    let csvContent = "\uFEFFFecha,Tipo,Monto,Categoria,Zona,Descripcion\n";
+    let csvContent = "\uFEFFFecha,Hora,Tipo,Monto,Categoria,Zona,Descripcion\n";
 
     data.forEach(t => {
         let type = t.type === 'income' ? 'Ingreso' : 'Gasto';
         let date = "Desconocida";
         try { if (t.date) date = new Date(t.date).toLocaleDateString('es-ES'); } catch (e) { }
+        const saleTimestamp = getSaleTimestamp(t);
+        const time = saleTimestamp.estimated ? '' : formatTimeDisplay(saleTimestamp.date);
 
         let desc = '"' + (t.desc || '').replace(/"/g, '""') + '"';
         let cat = '"' + (t.category || '').replace(/"/g, '""') + '"';
         let zone = '"' + (t.zone || '').replace(/"/g, '""') + '"';
 
-        csvContent += `${date},${type},${t.amount},${cat},${zone},${desc}\n`;
+        csvContent += `${date},${time},${type},${t.amount},${cat},${zone},${desc}\n`;
     });
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -170,4 +173,45 @@ export function downloadImageSummary(data, filterLabel = 'Resumen', filterName =
             if (typeof notify === 'function') notify("Error al generar la imagen");
         }
     }, 600);
+}
+
+function triggerDownload(blob, fileName) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Respaldo completo (solo lectura): todas las colecciones de Firebase + estado local.
+export async function downloadFullBackup(notify, button = null) {
+    if (button) button.disabled = true;
+    if (typeof notify === 'function') notify("Preparando respaldo completo...");
+
+    try {
+        const backup = await buildFullBackup();
+        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+        const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+        triggerDownload(blob, `Respaldo_Completo_LaBarra_${stamp}.json`);
+
+        const total = Object.values(backup.summary).reduce((sum, item) => sum + (item.count || 0), 0);
+        const failed = Object.entries(backup.summary).filter(([, item]) => item.error).map(([name]) => name);
+        const fromCache = Object.entries(backup.summary).filter(([, item]) => item.fromCache).map(([name]) => name);
+
+        if (failed.length > 0) {
+            notify?.(`Respaldo descargado con errores en: ${failed.join(', ')}`);
+        } else if (fromCache.length > 0) {
+            notify?.(`Respaldo descargado (${total} registros), pero sin conexión: puede no estar al día`);
+        } else {
+            notify?.(`Respaldo completo descargado: ${total} registros`);
+        }
+    } catch (error) {
+        console.error("Error generando respaldo completo:", error);
+        notify?.("No se pudo generar el respaldo completo");
+    } finally {
+        if (button) button.disabled = false;
+    }
 }

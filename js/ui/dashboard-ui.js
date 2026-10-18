@@ -1,6 +1,6 @@
-import { formatMoney, normalizeText, toTitleCase } from '../core/date-utils.js';
+import { formatMoney, normalizeText, toTitleCase, escapeHtml } from '../core/date-utils.js';
 import { createTransactionRow } from './history-ui.js';
-import { getCustomBranches } from '../services/branches-service.js';
+import { getCustomBranches, getStableBranchColor } from '../services/branches-service.js';
 
 export function updateDashboardSummaryCards(transactions) {
     const summaryIncome = document.getElementById('summary-income');
@@ -9,20 +9,43 @@ export function updateDashboardSummaryCards(transactions) {
 
     let totalIncome = 0;
     let totalExpense = 0;
+    let incomeCount = 0;
+    let expenseCount = 0;
 
     (transactions || []).forEach(item => {
         const amount = Number(item.amount) || 0;
-        if (item.type === 'income') totalIncome += amount;
-        else if (item.type === 'expense') totalExpense += amount;
+        if (item.type === 'income') {
+            totalIncome += amount;
+            incomeCount += 1;
+        } else if (item.type === 'expense') {
+            totalExpense += amount;
+            expenseCount += 1;
+        }
     });
 
+    const profit = totalIncome - totalExpense;
     if (summaryIncome) summaryIncome.textContent = formatMoney(totalIncome);
     if (summaryExpense) summaryExpense.textContent = formatMoney(totalExpense);
     if (summaryProfit) {
-        const profit = totalIncome - totalExpense;
         summaryProfit.textContent = formatMoney(profit);
-        summaryProfit.style.color = profit >= 0 ? 'var(--success)' : 'var(--danger)';
+        summaryProfit.classList.toggle('is-negative', profit < 0);
+        summaryProfit.classList.toggle('is-positive', profit > 0);
     }
+
+    setMeta('summary-income-meta', incomeCount > 0
+        ? `${incomeCount} venta${incomeCount === 1 ? '' : 's'} · ticket promedio ${formatMoney(totalIncome / incomeCount)}`
+        : 'Sin ventas en este periodo');
+    setMeta('summary-expense-meta', expenseCount > 0
+        ? `${expenseCount} gasto${expenseCount === 1 ? '' : 's'} registrado${expenseCount === 1 ? '' : 's'}`
+        : 'Sin gastos en este periodo');
+    setMeta('summary-profit-meta', totalIncome > 0
+        ? `Margen ${Math.round((profit / totalIncome) * 100)}% sobre ventas`
+        : '—');
+}
+
+function setMeta(id, text) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = text;
 }
 
 export function renderRecentTransactions(transactions, limit = 6) {
@@ -33,7 +56,7 @@ export function renderRecentTransactions(transactions, limit = 6) {
     const slice = (transactions || []).slice(0, limit);
 
     if (slice.length === 0) {
-        recentTbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Sin movimientos registrados</td></tr>`;
+        recentTbody.innerHTML = `<tr><td colspan="6" class="table-empty">Sin movimientos registrados</td></tr>`;
         return;
     }
 
@@ -179,17 +202,28 @@ export function renderBranchSalesSummary(data) {
     const customBranches = getCustomBranches();
     const salesByBranch = customBranches.map(branch => ({
         name: branch.name,
+        color: getStableBranchColor(branch),
         total: (data || [])
             .filter(item => item.type === 'income' && (item.zone === branch.name || item.branch === branch.id || item.branchId === branch.id))
             .reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
     }));
 
-    branchSalesList.innerHTML = salesByBranch.map(branch => `
-        <div class="branch-sales-item">
-            <span>${branch.name}</span>
-            <strong>${formatMoney(branch.total)}</strong>
-        </div>
-    `).join('');
+    const grandTotal = salesByBranch.reduce((sum, branch) => sum + branch.total, 0);
+    branchSalesList.innerHTML = salesByBranch
+        .sort((a, b) => b.total - a.total)
+        .map(branch => {
+            const share = grandTotal > 0 ? Math.round((branch.total / grandTotal) * 100) : 0;
+            return `
+            <div class="branch-sales-item">
+                <div class="branch-sales-row">
+                    <span class="branch-sales-name"><span class="branch-color-dot" style="background:${branch.color};"></span>${escapeHtml(branch.name)}</span>
+                    <strong>${formatMoney(branch.total)}</strong>
+                </div>
+                <div class="share-bar" aria-hidden="true"><span style="width:${share}%; background:${branch.color};"></span></div>
+                <small class="branch-sales-share">${share}% de las ventas</small>
+            </div>
+        `;
+        }).join('');
 }
 
 export function getProductsPeriodStats(data, products = []) {
@@ -227,7 +261,7 @@ export function renderProductsPeriodSummary(data, filterLabel = 'Resumen', produ
     if (!dailyProductsList) return;
 
     if (dailyProductsTitle) {
-        dailyProductsTitle.textContent = `Resumen de productos - ${filterLabel}`;
+        dailyProductsTitle.textContent = `Productos vendidos · ${filterLabel}`;
     }
 
     const periodProducts = getProductsPeriodStats(data, products);
@@ -235,8 +269,9 @@ export function renderProductsPeriodSummary(data, filterLabel = 'Resumen', produ
     dailyProductsList.innerHTML = '';
     if (periodProducts.length === 0) {
         dailyProductsList.innerHTML = `
-            <div class="daily-products-empty">
-                Sin productos vendidos en este periodo
+            <div class="empty-state empty-state-compact">
+                <i class="ph ph-hamburger"></i>
+                <p>Sin productos vendidos en este periodo</p>
             </div>
         `;
         return;

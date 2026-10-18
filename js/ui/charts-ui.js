@@ -1,46 +1,78 @@
-import { formatMoney } from '../core/date-utils.js';
+import { formatMoney, getLocalDateInputValue } from '../core/date-utils.js';
 import { getCustomBranches, getStableBranchColor } from '../services/branches-service.js';
 
 let charts = { main: null, category: null };
+
+const CHART_COLORS = {
+    income: '#10b981',
+    expense: '#ef4444',
+    grid: 'rgba(148, 163, 184, 0.12)',
+    text: '#9aa6b8',
+    empty: '#24324d'
+};
+
+const moneyTooltip = {
+    callbacks: {
+        label: (context) => ` ${context.dataset.label || context.label}: ${formatMoney(context.parsed.y ?? context.parsed)}`
+    }
+};
 
 export function initCharts() {
     const mainChartEl = document.getElementById('mainChart');
     const catChartEl = document.getElementById('categoryChart');
     if (!mainChartEl || !catChartEl || typeof Chart === 'undefined') return;
 
-    const ctxMain = mainChartEl.getContext('2d');
-    const ctxCat = catChartEl.getContext('2d');
-
-    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.color = CHART_COLORS.text;
     Chart.defaults.font.family = 'Inter';
+    Chart.defaults.plugins.tooltip.backgroundColor = '#0b1220';
+    Chart.defaults.plugins.tooltip.borderColor = 'rgba(148, 163, 184, 0.25)';
+    Chart.defaults.plugins.tooltip.borderWidth = 1;
+    Chart.defaults.plugins.tooltip.padding = 10;
 
     if (charts.main) charts.main.destroy();
     if (charts.category) charts.category.destroy();
 
-    charts.main = new Chart(ctxMain, {
+    charts.main = new Chart(mainChartEl.getContext('2d'), {
         type: 'bar',
         data: { labels: [], datasets: [] },
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
             scales: {
-                y: { grid: { color: 'rgba(255,255,255,0.05)' } },
-                x: { grid: { display: false } }
+                y: {
+                    beginAtZero: true,
+                    grid: { color: CHART_COLORS.grid },
+                    border: { display: false },
+                    ticks: { callback: (value) => `$${Number(value).toLocaleString('es-MX')}` }
+                },
+                x: { grid: { display: false }, border: { display: false } }
             },
-            plugins: { legend: { position: 'top' } }
+            plugins: {
+                legend: { position: 'top', align: 'end', labels: { usePointStyle: true, pointStyle: 'circle', boxWidth: 8 } },
+                tooltip: moneyTooltip
+            }
         }
     });
 
-    charts.category = new Chart(ctxCat, {
+    charts.category = new Chart(catChartEl.getContext('2d'), {
         type: 'doughnut',
         data: { labels: [], datasets: [] },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            plugins: { legend: { position: 'right' } },
-            cutout: '75%'
+            plugins: {
+                // La leyenda se muestra en la lista de sucursales debajo de la gráfica
+                legend: { display: false },
+                tooltip: { callbacks: { label: (context) => ` ${context.label}: ${formatMoney(context.parsed)}` } }
+            },
+            cutout: '72%'
         }
     });
+}
+
+function belongsToBranch(transaction, branch) {
+    return transaction.branchId === branch.id || transaction.branch === branch.id || transaction.zone === branch.name;
 }
 
 export function updateCharts(data) {
@@ -49,88 +81,59 @@ export function updateCharts(data) {
     }
     if (!charts.main || !charts.category) return;
 
+    // Agrupa por día local (YYYY-MM-DD) para ordenar cronológicamente aunque cambie el mes
     const groupedByDay = {};
     (data || []).forEach(t => {
-        let day = "N/A";
-        try {
-            if (t.date) {
-                const d = new Date(t.date);
-                if (!isNaN(d.getTime())) {
-                    day = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
-                }
-            }
-        } catch (e) { }
-
-        if (!groupedByDay[day]) groupedByDay[day] = { inc: 0, exp: 0 };
-        if (t.type === 'income') groupedByDay[day].inc += (Number(t.amount) || 0);
-        else groupedByDay[day].exp += (Number(t.amount) || 0);
+        const date = t.date ? new Date(t.date) : null;
+        if (!date || isNaN(date.getTime())) return;
+        const key = getLocalDateInputValue(date);
+        if (!groupedByDay[key]) groupedByDay[key] = { inc: 0, exp: 0 };
+        if (t.type === 'income') groupedByDay[key].inc += (Number(t.amount) || 0);
+        else groupedByDay[key].exp += (Number(t.amount) || 0);
     });
 
-    const labels = Object.keys(groupedByDay).sort();
-    const incomes = labels.map(l => groupedByDay[l].inc);
-    const expenses = labels.map(l => groupedByDay[l].exp);
+    const keys = Object.keys(groupedByDay).sort();
+    const labels = keys.map(key => {
+        const [, month, day] = key.split('-');
+        return `${day}/${month}`;
+    });
 
     charts.main.data = {
         labels,
         datasets: [
-            { label: 'Ingresos', data: incomes, backgroundColor: '#10b981', borderRadius: 4 },
-            { label: 'Gastos', data: expenses, backgroundColor: '#ef4444', borderRadius: 4 }
+            { label: 'Ventas', data: keys.map(key => groupedByDay[key].inc), backgroundColor: CHART_COLORS.income, borderRadius: 6, maxBarThickness: 36 },
+            { label: 'Gastos', data: keys.map(key => groupedByDay[key].exp), backgroundColor: CHART_COLORS.expense, borderRadius: 6, maxBarThickness: 36 }
         ]
     };
     charts.main.update();
 
-    const totalInc = (data || []).filter(t => t.type === 'income').reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-    const totalExp = (data || []).filter(t => t.type === 'expense').reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
-    const customBranches = getCustomBranches();
-
-    const branchBreakdown = customBranches
+    const branchBreakdown = getCustomBranches()
         .map(branch => ({
             name: branch.name,
             color: getStableBranchColor(branch),
             total: (data || [])
-                .filter(item => item.type === 'income' && item.zone === branch.name)
+                .filter(item => item.type === 'income' && belongsToBranch(item, branch))
                 .reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
         }))
         .filter(item => item.total > 0);
 
     const statsContainer = document.getElementById('balance-stats-container');
+    if (statsContainer) statsContainer.innerHTML = '';
 
     if (branchBreakdown.length === 0) {
-        charts.category.data = { labels: ['Sin datos'], datasets: [{ data: [1], backgroundColor: ['#334155'], borderWidth: 0 }] };
-        if (statsContainer) statsContainer.innerHTML = '';
+        charts.category.data = { labels: ['Sin ventas'], datasets: [{ data: [1], backgroundColor: [CHART_COLORS.empty], borderWidth: 0 }] };
+        charts.category.options.plugins.tooltip.enabled = false;
     } else {
         charts.category.data = {
             labels: branchBreakdown.map(item => item.name),
             datasets: [{
                 data: branchBreakdown.map(item => item.total),
                 backgroundColor: branchBreakdown.map(item => item.color),
-                borderWidth: 0
+                borderWidth: 0,
+                hoverOffset: 6
             }]
         };
-
-        const diff = totalInc - totalExp;
-        const diffText = diff >= 0 ? 'Ganancia Neta' : 'Pérdida';
-        const diffClass = diff >= 0 ? 'profit' : 'loss';
-
-        if (statsContainer) {
-            statsContainer.innerHTML = `
-                <div class="balance-stats">
-                    <div class="balance-stat-item income">
-                        <span class="label">Ventas Totales</span>
-                        <span class="value">${formatMoney(totalInc)}</span>
-                        <span style="font-size:0.8rem">${branchBreakdown.length} sucursales con ventas</span>
-                    </div>
-                    <div class="balance-stat-item expense">
-                        <span class="label">Gastos</span>
-                        <span class="value">${formatMoney(totalExp)}</span>
-                        <span style="font-size:0.8rem">Total del periodo</span>
-                    </div>
-                </div>
-                <div class="balance-result ${diffClass}">
-                    ${diffText}: ${formatMoney(Math.abs(diff))}
-                </div>
-            `;
-        }
+        charts.category.options.plugins.tooltip.enabled = true;
     }
     charts.category.update();
 }

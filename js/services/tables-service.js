@@ -1,11 +1,10 @@
 import { db } from '../config/firebase-config.js';
-import { collection, onSnapshot, query, orderBy, getDocs, writeBatch, doc, addDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { collection, onSnapshot, query, orderBy, doc, addDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
 import { isSameLocalDate } from '../core/date-utils.js';
 import { normalizeOpenTables, calculateItemsTotal, Table } from '../models/Table.js';
 
 let openTables = normalizeOpenTables(loadLocalState(STORAGE_KEYS.openTables, []));
-let isSyncingTables = false;
 
 export function getOpenTables() {
     return openTables;
@@ -111,41 +110,6 @@ export function deleteTable(tableId) {
     if (db && !tableId.startsWith('table_')) {
         const docRef = doc(db, "dashboard_tables", tableId);
         deleteDoc(docRef).catch(err => console.warn("Error eliminando mesa de Firebase:", err));
-    }
-}
-
-export async function syncTablesToCloud() {
-    if (!db || isSyncingTables) return;
-
-    isSyncingTables = true;
-    try {
-        const collectionRef = collection(db, "dashboard_tables");
-        const existingSnapshot = await getDocs(collectionRef);
-        const batch = writeBatch(db);
-
-        existingSnapshot.forEach((docItem) => {
-            batch.delete(docItem.ref);
-        });
-
-        openTables.forEach((table, index) => {
-            if (table && table.status === 'open') {
-                const docRef = doc(collection(db, "dashboard_tables"), table.id || `table_${index}`);
-                batch.set(docRef, {
-                    branchId: table.branchId || '',
-                    name: table.name,
-                    items: table.items,
-                    total: table.total,
-                    status: table.status,
-                    createdAt: table.createdAt
-                });
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar las mesas:", error);
-    } finally {
-        isSyncingTables = false;
     }
 }
 

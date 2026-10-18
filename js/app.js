@@ -3,7 +3,7 @@ import { db } from './config/firebase-config.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from './config/storage.js';
 import { authenticate, isAuthenticated } from './core/auth.js';
 import { getLocalDateInputValue, createLocalDateFromInput, isSameLocalDate } from './core/date-utils.js';
-import { showToast, scrollToTop } from './core/ui-feedback.js';
+import { showToast, scrollToTop, initModalScrollLock } from './core/ui-feedback.js';
 
 // Services
 import {
@@ -38,7 +38,8 @@ import {
 } from './ui/charts-ui.js';
 import {
     downloadCSV,
-    downloadImageSummary
+    downloadImageSummary,
+    downloadFullBackup
 } from './ui/backup-ui.js';
 import {
     updateDashboardSummaryCards,
@@ -55,6 +56,8 @@ import {
     renderFullHistory,
     toggleTopSellersSection,
     toggleTopExpensesSection,
+    toggleTopExpensesMode,
+    setCollapsibleSectionState,
     toggleHistoryTransactionsSection
 } from './ui/history-ui.js';
 import {
@@ -62,24 +65,16 @@ import {
     renderManageProducts,
     renderManageCategories,
     renderManageBranches,
-    renderManageExpenseTags,
     renderManageProductBranchOptions,
-    renderExpenseTags,
-    openExpenseModal,
-    closeModal,
-    handleExpenseFormSubmit,
     saveManagedProduct,
     saveManagedCategory,
     saveManagedBranch,
-    saveManagedExpenseTag,
     startEditingProduct,
     startEditingCategory,
     startEditingBranch,
-    startEditingExpenseTag,
     deleteManagedProduct,
     deleteManagedCategory,
     deleteManagedBranch,
-    deleteManagedExpenseTag,
     moveManagedProduct,
     reorderCategories,
     sortProductsAlphabetically,
@@ -87,10 +82,62 @@ import {
     resetManageProductForm,
     resetManageCategoryForm,
     resetManageBranchForm,
-    resetManageExpenseForm,
-    createModifierOptionRowHtml,
-    createModifierGroupCardHtml
+    handleBranchScheduleChange,
+    updateBranchSessionOptions
 } from './ui/products-ui.js';
+import {
+    renderSessionsSection,
+    handleSessionsSectionClick,
+    handleSessionModalClick,
+    handleSessionModalInput,
+    closeSessionModal,
+    runScheduleTick,
+    setSessionsChangeHandler
+} from './ui/sessions-ui.js';
+import { subscribeSessions } from './services/sessions-service.js';
+import {
+    renderManageModifiers,
+    toggleModifierForm,
+    closeModifierForm,
+    addModifierOptionRow,
+    handleModifierFormClick,
+    handleModifierTypeChange,
+    saveManagedModifier,
+    startEditingModifier,
+    deleteManagedModifier,
+    migrateLegacyModifiers
+} from './ui/modifiers-ui.js';
+import {
+    renderManageInventory,
+    renderInventoryUnitOptions,
+    toggleInventoryForm,
+    closeInventoryForm,
+    saveManagedInventoryItem,
+    handleInventoryPanelClick,
+    updateConsumerHints
+} from './ui/inventory-ui.js';
+import { subscribeModifierGroups, getProductModifierGroups } from './services/modifier-groups-service.js';
+import { subscribeInventoryItems } from './services/inventory-service.js';
+import {
+    renderExpenseTags,
+    renderManageExpenseTags,
+    openExpenseModal,
+    closeModal,
+    handleExpenseFormSubmit,
+    handleExpenseTagsContainerClick,
+    handleExpenseSearchInput,
+    addExpenseTagFromModal,
+    handleManageExpenseTagGroupChange,
+    saveManagedExpenseTag,
+    startEditingExpenseTag,
+    deleteManagedExpenseTag,
+    resetManageExpenseForm,
+    saveManagedExpenseGroup,
+    startEditingExpenseGroup,
+    deleteManagedExpenseGroup,
+    resetManageExpenseGroupForm
+} from './ui/expenses-ui.js';
+import { subscribeExpenseGroups } from './services/expense-groups-service.js';
 import {
     startNewSale,
     closeSaleModal,
@@ -101,6 +148,8 @@ import {
     renderSaleSummary,
     setSaleMobilePanel,
     handleSaleBranchChange,
+    handleSaleDateChange,
+    handleSaleTimeInput,
     handleSaleTotalInput,
     handleSalePrimaryAction,
     handleCloseActiveTable,
@@ -108,6 +157,7 @@ import {
     closeModifiersModal,
     updateModifiersModalTotal,
     confirmAddProductWithModifiers,
+    enforceModifierMaxSelect,
     addItemToCurrentSale,
     updateCurrentSaleItemQty,
     removeItemFromCurrentSale
@@ -126,14 +176,51 @@ let views = {};
 let navBtns = {};
 
 // View Management
+const VIEW_TITLES = {
+    dashboard: 'Principal',
+    sessions: 'Jornadas',
+    tables: 'Mesas',
+    transactions: 'Historial',
+    products: 'Productos y configuración',
+    backup: 'Respaldos'
+};
+// El historial muestra todos los movimientos (tiene su propio buscador), por eso no lleva filtros de periodo
+const VIEWS_WITH_PERIOD_FILTERS = ['dashboard', 'backup'];
+
+let recentTransactionsVisible = true;
+
+function setProductsTab(tabName) {
+    const tabs = document.querySelectorAll('[data-products-tab]');
+    if (![...tabs].some(tab => tab.dataset.productsTab === tabName)) tabName = 'products';
+    tabs.forEach(tab => {
+        const isActive = tab.dataset.productsTab === tabName;
+        tab.classList.toggle('active', isActive);
+        tab.setAttribute('aria-selected', String(isActive));
+    });
+    document.querySelectorAll('[data-products-panel]').forEach(panel => {
+        panel.hidden = panel.dataset.productsPanel !== tabName;
+    });
+    saveLocalState(STORAGE_KEYS.productsTab, tabName);
+}
+
 export function switchView(viewName) {
     Object.values(views).forEach(v => v?.classList.remove('active-view'));
     Object.values(navBtns).forEach(btn => btn?.classList.remove('active'));
 
     if (views[viewName]) views[viewName].classList.add('active-view');
     if (navBtns[viewName]) navBtns[viewName].classList.add('active');
+    Object.entries(navBtns).forEach(([name, btn]) => {
+        if (btn) btn.setAttribute('aria-current', name === viewName ? 'page' : 'false');
+    });
+
+    const pageTitle = document.getElementById('page-title');
+    if (pageTitle) pageTitle.textContent = VIEW_TITLES[viewName] || 'Principal';
+    // Los filtros de periodo solo aplican a las vistas que muestran movimientos
+    const headerControls = document.getElementById('header-controls');
+    if (headerControls) headerControls.hidden = !VIEWS_WITH_PERIOD_FILTERS.includes(viewName);
 
     if (viewName === 'dashboard') updateDashboard();
+    if (viewName === 'sessions') renderSessionsSection();
     if (viewName === 'tables') renderTablesView(getTransactions());
     if (viewName === 'transactions') renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
     if (viewName === 'products') {
@@ -142,6 +229,8 @@ export function switchView(viewName) {
         renderManageCategories();
         renderManageBranches();
         renderManageProductBranchOptions();
+        renderManageModifiers();
+        renderManageInventory();
     }
 
     scrollToTop();
@@ -203,6 +292,7 @@ export function getFilterLabel() {
 }
 
 export function updateDashboard() {
+    renderSessionsSection();
     const filtered = getFilteredData();
     const customProducts = getCustomProducts();
 
@@ -239,11 +329,23 @@ window.editTransaction = (id) => {
 function setupEventListeners() {
     // Navigation
     navBtns.dashboard?.addEventListener('click', () => switchView('dashboard'));
+    navBtns.sessions?.addEventListener('click', () => switchView('sessions'));
     navBtns.tables?.addEventListener('click', () => switchView('tables'));
     navBtns.transactions?.addEventListener('click', () => switchView('transactions'));
     navBtns.products?.addEventListener('click', () => switchView('products'));
     navBtns.backup?.addEventListener('click', () => switchView('backup'));
     document.getElementById('btn-view-all')?.addEventListener('click', () => switchView('transactions'));
+    document.getElementById('btn-toggle-recent-transactions')?.addEventListener('click', (e) => {
+        recentTransactionsVisible = !recentTransactionsVisible;
+        setCollapsibleSectionState(document.getElementById('recent-transactions-panel'), e.currentTarget, recentTransactionsVisible);
+    });
+
+    // Pestañas de Productos y configuración
+    document.querySelector('#view-products .tabs')?.addEventListener('click', (e) => {
+        const tab = e.target.closest('[data-products-tab]');
+        if (tab) setProductsTab(tab.dataset.productsTab);
+    });
+    setProductsTab(loadLocalState(STORAGE_KEYS.productsTab, 'products'));
 
     // Dashboard Time Filters
     const filterBtns = document.querySelectorAll('.filter-btn');
@@ -263,7 +365,8 @@ function setupEventListeners() {
                     filterBtns.forEach(b => b.classList.remove('active'));
                     customDateTrigger.classList.add('active');
                     customDateLabel = `del ${customStartDate.toLocaleDateString('es-ES')} al ${customEndDate.toLocaleDateString('es-ES')}`;
-                    customDateTrigger.textContent = customDateLabel;
+                    const shortDate = (date) => date.toLocaleDateString('es-MX', { day: 'numeric', month: 'short' });
+                    customDateTrigger.innerHTML = `<i class="ph ph-calendar-check"></i> <span>${shortDate(customStartDate)} – ${shortDate(customEndDate)}</span>`;
                     updateDashboard();
                 }
             }
@@ -277,7 +380,7 @@ function setupEventListeners() {
             filterBtns.forEach(b => b.classList.remove('active'));
             if (customDateTrigger) {
                 customDateTrigger.classList.remove('active');
-                customDateTrigger.innerHTML = '<i class="ph ph-calendar"></i> Fechas';
+                customDateTrigger.innerHTML = '<i class="ph ph-calendar-blank"></i> <span>Fechas</span>';
             }
             tgt.classList.add('active');
             currentFilter = tgt.dataset.filter;
@@ -327,6 +430,11 @@ function setupEventListeners() {
         renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
     });
 
+    document.getElementById('btn-top-expenses-mode')?.addEventListener('click', () => {
+        toggleTopExpensesMode();
+        renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+    });
+
     document.getElementById('btn-toggle-history-transactions')?.addEventListener('click', () => {
         toggleHistoryTransactionsSection();
         renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
@@ -336,6 +444,8 @@ function setupEventListeners() {
     document.getElementById('btn-new-sale')?.addEventListener('click', () => startNewSale());
     document.getElementById('close-sale-modal')?.addEventListener('click', () => closeSaleModal());
     document.getElementById('sale-branch-select')?.addEventListener('change', handleSaleBranchChange);
+    document.getElementById('sale-date-input')?.addEventListener('change', handleSaleDateChange);
+    document.getElementById('sale-time-input')?.addEventListener('input', handleSaleTimeInput);
     document.getElementById('sale-total-input')?.addEventListener('input', handleSaleTotalInput);
     document.getElementById('sale-primary-action')?.addEventListener('click', () => handleSalePrimaryAction({
         onUpdate: () => {
@@ -371,13 +481,16 @@ function setupEventListeners() {
     const saleProductsGrid = document.getElementById('sale-products-grid');
     if (saleProductsGrid) {
         saleProductsGrid.addEventListener('click', (event) => {
+            // Un toque en cualquier parte de la tarjeta agrega el producto; los botones internos tienen su propia acción
             const btn = event.target.closest('button');
-            if (!btn) return;
-            
-            const productId = btn.dataset.productId;
-            const action = btn.dataset.action;
+            const card = event.target.closest('.sale-product-card');
+            if (!btn && !card) return;
+            if (!btn && event.target.closest('.stepper')) return;
+
+            const productId = btn?.dataset.productId || card?.dataset.productId;
+            const action = btn ? btn.dataset.action : 'add';
             const product = getCustomProducts().find(p => p.id === productId);
-            const hasModifiers = product && Array.isArray(product.modifiers) && product.modifiers.length > 0;
+            const hasModifiers = product && getProductModifierGroups(product).length > 0;
             
             if (action === 'customize' || (hasModifiers && (action === 'add' || !action))) {
                 openModifiersModal(productId);
@@ -425,7 +538,10 @@ function setupEventListeners() {
         if (valEl) valEl.textContent = String(newQty);
         updateModifiersModalTotal();
     });
-    document.getElementById('modifiers-modal-body')?.addEventListener('change', updateModifiersModalTotal);
+    document.getElementById('modifiers-modal-body')?.addEventListener('change', (e) => {
+        enforceModifierMaxSelect(e.target);
+        updateModifiersModalTotal();
+    });
     document.getElementById('btn-confirm-modifiers')?.addEventListener('click', confirmAddProductWithModifiers);
 
     // Expense Modal & Form Events
@@ -449,14 +565,18 @@ function setupEventListeners() {
         });
     }
 
-    document.getElementById('save-new-expense')?.addEventListener('click', () => {
-        const nameInput = document.getElementById('new-exp-name');
-        const name = nameInput?.value.trim();
-        if (name) {
-            saveManagedExpenseTag();
-            if (nameInput) nameInput.value = '';
-            if (newExpenseForm) newExpenseForm.style.display = 'none';
+    document.getElementById('save-new-expense')?.addEventListener('click', () => addExpenseTagFromModal());
+    document.getElementById('new-exp-name')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            addExpenseTagFromModal();
         }
+    });
+    document.getElementById('expense-tags-container')?.addEventListener('click', handleExpenseTagsContainerClick);
+    document.getElementById('expense-tag-search')?.addEventListener('input', handleExpenseSearchInput);
+    document.getElementById('expense-tag-search')?.addEventListener('keydown', (e) => {
+        // Evita que Enter en el buscador envíe el formulario de gasto
+        if (e.key === 'Enter') e.preventDefault();
     });
 
     // Tables View Events
@@ -521,6 +641,19 @@ function setupEventListeners() {
         }
     });
     document.getElementById('manage-save-branch')?.addEventListener('click', saveManagedBranch);
+    document.getElementById('manage-branch-sessions')?.addEventListener('change', updateBranchSessionOptions);
+    document.querySelectorAll('input[name="manage-branch-open-mode"]').forEach(input => input.addEventListener('change', updateBranchSessionOptions));
+    document.getElementById('manage-branch-schedule')?.addEventListener('change', handleBranchScheduleChange);
+
+    // Jornadas (Principal y modal de jornada)
+    document.getElementById('sessions-section')?.addEventListener('click', handleSessionsSectionClick);
+    document.getElementById('session-modal')?.addEventListener('click', handleSessionModalClick);
+    document.getElementById('session-modal')?.addEventListener('input', handleSessionModalInput);
+    document.getElementById('close-session-modal')?.addEventListener('click', closeSessionModal);
+    setSessionsChangeHandler(() => {
+        updateDashboard();
+        renderSaleProducts();
+    });
 
     const manageNewExpenseForm = document.getElementById('manage-new-expense-form');
     document.getElementById('btn-add-expense-manage')?.addEventListener('click', () => {
@@ -531,44 +664,60 @@ function setupEventListeners() {
     });
     document.getElementById('manage-save-expense')?.addEventListener('click', saveManagedExpenseTag);
 
-    // Modifier Builder in Admin Form
-    const manageModGroupsContainer = document.getElementById('manage-modifier-groups-container');
-    document.getElementById('btn-add-modifier-group')?.addEventListener('click', () => {
-        if (!manageModGroupsContainer) return;
-        const div = document.createElement('div');
-        div.innerHTML = createModifierGroupCardHtml();
-        manageModGroupsContainer.appendChild(div.firstElementChild);
-        div.querySelector('.mod-group-name-input')?.focus();
-    });
-
-    manageModGroupsContainer?.addEventListener('click', (e) => {
-        const btnRemoveGroup = e.target.closest('.btn-remove-mod-group');
-        if (btnRemoveGroup) {
-            const card = btnRemoveGroup.closest('.modifier-group-card');
-            if (card) card.remove();
-            return;
-        }
-
-        const btnAddOption = e.target.closest('.btn-add-mod-option');
-        if (btnAddOption) {
-            const card = btnAddOption.closest('.modifier-group-card');
-            const optionsList = card?.querySelector('.mod-group-options-list');
-            if (optionsList) {
-                const div = document.createElement('div');
-                div.innerHTML = createModifierOptionRowHtml();
-                optionsList.appendChild(div.firstElementChild);
-                div.querySelector('input')?.focus();
-            }
-            return;
-        }
-
-        const btnRemoveOpt = e.target.closest('.btn-remove-mod-opt');
-        if (btnRemoveOpt) {
-            const row = btnRemoveOpt.closest('.mod-option-row-edit');
-            if (row) row.remove();
-            return;
+    const manageNewExpenseGroupForm = document.getElementById('manage-new-expense-group-form');
+    document.getElementById('btn-add-expense-group-manage')?.addEventListener('click', () => {
+        if (manageNewExpenseGroupForm) {
+            resetManageExpenseGroupForm();
+            manageNewExpenseGroupForm.style.display = manageNewExpenseGroupForm.style.display === 'none' ? 'block' : 'none';
         }
     });
+    document.getElementById('manage-save-expense-group')?.addEventListener('click', saveManagedExpenseGroup);
+    document.getElementById('manage-expense-groups-list')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const { action, id } = btn.dataset;
+        if (action === 'expense-group-edit') startEditingExpenseGroup(id);
+        if (action === 'expense-group-delete') deleteManagedExpenseGroup(id);
+    });
+
+    // Pestaña Modificadores
+    const refreshProductViews = () => {
+        renderManageProducts();
+        renderSaleProducts();
+        renderManageInventory();
+    };
+    document.getElementById('btn-add-modifier-manage')?.addEventListener('click', toggleModifierForm);
+    document.getElementById('manage-cancel-modifier')?.addEventListener('click', closeModifierForm);
+    document.getElementById('btn-add-mod-option-row')?.addEventListener('click', () => addModifierOptionRow());
+    document.getElementById('manage-mod-type')?.addEventListener('change', handleModifierTypeChange);
+    document.getElementById('manage-modifier-form')?.addEventListener('click', handleModifierFormClick);
+    document.getElementById('manage-save-modifier')?.addEventListener('click', () => saveManagedModifier({ onProductsChanged: refreshProductViews }));
+    document.getElementById('modifiers-migration-banner')?.addEventListener('click', async (e) => {
+        if (e.target.closest('#btn-migrate-modifiers')) {
+            await migrateLegacyModifiers();
+            refreshProductViews();
+        }
+    });
+    document.getElementById('manage-modifiers-list')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const { action, id } = btn.dataset;
+        if (action === 'modifier-edit') startEditingModifier(id);
+        if (action === 'modifier-delete') deleteManagedModifier(id, { onProductsChanged: refreshProductViews });
+    });
+
+    // Pestaña Inventario
+    renderInventoryUnitOptions();
+    document.getElementById('btn-add-inventory-manage')?.addEventListener('click', toggleInventoryForm);
+    document.getElementById('manage-cancel-inventory')?.addEventListener('click', closeInventoryForm);
+    document.getElementById('manage-save-inventory')?.addEventListener('click', async () => {
+        await saveManagedInventoryItem();
+        refreshProductViews();
+    });
+    document.querySelector('[data-products-panel="inventory"]')?.addEventListener('click', async (e) => {
+        await handleInventoryPanelClick(e);
+    });
+    document.getElementById('manage-inventory-form')?.addEventListener('input', updateConsumerHints);
 
     // Admin Delegated List Handlers
     document.getElementById('manage-products-list')?.addEventListener('click', (e) => {
@@ -604,8 +753,12 @@ function setupEventListeners() {
         if (action === 'expense-edit') startEditingExpenseTag(id);
         if (action === 'expense-delete') deleteManagedExpenseTag(id);
     });
+    document.getElementById('manage-expense-tags-list')?.addEventListener('change', handleManageExpenseTagGroupChange);
 
     // Exports
+    document.getElementById('btn-export-full-backup')?.addEventListener('click', (e) => {
+        downloadFullBackup(showToast, e.currentTarget);
+    });
     document.getElementById('btn-export-csv')?.addEventListener('click', () => {
         downloadCSV(getFilteredData(), currentFilter, showToast);
     });
@@ -672,6 +825,7 @@ function initAuth() {
 function init() {
     views = {
         dashboard: document.getElementById('view-dashboard'),
+        sessions: document.getElementById('view-sessions'),
         tables: document.getElementById('view-tables'),
         transactions: document.getElementById('view-transactions'),
         products: document.getElementById('view-products'),
@@ -680,6 +834,7 @@ function init() {
 
     navBtns = {
         dashboard: document.getElementById('nav-dashboard'),
+        sessions: document.getElementById('nav-sessions'),
         tables: document.getElementById('nav-tables'),
         transactions: document.getElementById('nav-transactions'),
         products: document.getElementById('nav-products'),
@@ -688,6 +843,7 @@ function init() {
 
     initAuth();
     setupEventListeners();
+    initModalScrollLock();
 
     // Initial Subscriptions & Sync
     subscribeProducts(() => {
@@ -714,6 +870,37 @@ function init() {
     subscribeExpenseTags(() => {
         renderExpenseTags();
         renderManageExpenseTags();
+    });
+
+    subscribeSessions(() => {
+        renderSessionsSection();
+        renderSaleProducts();
+    });
+
+    // Horario fijo y duración en vivo: revisa cada minuto
+    runScheduleTick();
+    setInterval(() => {
+        runScheduleTick();
+        renderSessionsSection();
+    }, 60000);
+
+    subscribeModifierGroups(() => {
+        renderManageModifiers();
+        renderManageProducts();
+        renderSaleProducts();
+    });
+
+    subscribeInventoryItems(() => {
+        renderManageInventory();
+        renderManageProducts();
+    });
+
+    subscribeExpenseGroups(() => {
+        renderExpenseTags();
+        renderManageExpenseTags();
+        if (views.transactions?.classList.contains('active-view')) {
+            renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+        }
     });
 
     subscribeOpenTables(() => {

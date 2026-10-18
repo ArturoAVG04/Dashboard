@@ -31,7 +31,8 @@ export function normalizeTableItems(items) {
             ? item.selectedModifiers
             : (Array.isArray(item.modifiers) ? item.modifiers : []),
         modifierText: item.modifierText || '',
-        modSignature: item.modSignature || ''
+        modSignature: item.modSignature || '',
+        ...(item.addedAt ? { addedAt: item.addedAt } : {})
     })).filter(item => item.qty > 0);
 }
 

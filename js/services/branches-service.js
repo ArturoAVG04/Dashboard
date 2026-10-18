@@ -1,12 +1,15 @@
 import { db } from '../config/firebase-config.js';
-import { collection, onSnapshot, query, orderBy, getDocs, writeBatch, doc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { collection, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
 import { INITIAL_ZONES, BRANCH_COLOR_PALETTE } from '../config/constants.js';
 import { normalizeText } from '../core/date-utils.js';
+import { commitListChanges, uploadList } from './firestore-sync.js';
+import { normalizeSchedule } from '../models/BranchConfig.js';
+
+const BRANCHES_COLLECTION = 'dashboard_branches';
 
 let customBranches = sortNamedListAlphabetically(normalizeNamedList(loadLocalState(STORAGE_KEYS.branches, INITIAL_ZONES), 'branch'));
 let branchColorMap = loadLocalState(STORAGE_KEYS.branchColors, {});
-let isSyncingBranches = false;
 
 export function normalizeNamedList(items, prefix) {
     return (items || []).map((item, index) => {
@@ -19,7 +22,9 @@ export function normalizeNamedList(items, prefix) {
             };
         }
 
+        // Se conservan todos los campos del documento (p. ej. configuración nueva de sucursal)
         const normalizedItem = {
+            ...item,
             id: item.id || `${prefix}_${index}_${(item.name || '').toLowerCase().replace(/\s+/g, '_')}`,
             name: item.name || '',
             order: typeof item.order === 'number' ? item.order : index
@@ -46,11 +51,6 @@ export function hasDuplicateName(items, name, ignoreId = null) {
 
 export function getCustomBranches() {
     return customBranches;
-}
-
-export function setCustomBranches(branches) {
-    customBranches = branches;
-    saveLocalState(STORAGE_KEYS.branches, customBranches);
 }
 
 export function getBranchById(branchId) {
@@ -97,45 +97,38 @@ export function getStableBranchColor(branch) {
     return branchColorMap[key];
 }
 
-export async function syncBranchesToCloud() {
-    if (!db || isSyncingBranches) return;
+// Campos que la app guarda en Firestore. Los campos extra del documento se conservan (merge).
+export function branchToDoc(branch, index) {
+    return {
+        name: branch.name,
+        useTables: Boolean(branch.useTables),
+        order: typeof branch.order === 'number' ? branch.order : index,
+        // Configuración de jornadas (F5). En sucursales sin configurar estos valores por defecto
+        // coinciden con los de la lista anterior, así que no se escriben hasta que se editan.
+        sessionsEnabled: Boolean(branch.sessionsEnabled),
+        inventoryEnabled: Boolean(branch.inventoryEnabled),
+        openMode: branch.openMode === 'schedule' ? 'schedule' : 'manual',
+        schedule: normalizeSchedule(branch.schedule),
+        // Orden propio de productos en esta sucursal
+        productOrder: Array.isArray(branch.productOrder) ? branch.productOrder : []
+    };
+}
 
-    isSyncingBranches = true;
-    try {
-        const collectionRef = collection(db, "dashboard_branches");
-        const existingSnapshot = await getDocs(collectionRef);
-        const batch = writeBatch(db);
-
-        existingSnapshot.forEach((docItem) => {
-            batch.delete(docItem.ref);
-        });
-
-        customBranches.forEach((branch, index) => {
-            if (branch && branch.name) {
-                const docRef = doc(collection(db, "dashboard_branches"), branch.id || `branch_${index}`);
-                batch.set(docRef, {
-                    name: branch.name,
-                    useTables: Boolean(branch.useTables),
-                    order: typeof branch.order === 'number' ? branch.order : index
-                });
-            }
-        });
-
-        await batch.commit();
-    } catch (error) {
-        console.warn("No se pudieron sincronizar las sucursales:", error);
-    } finally {
-        isSyncingBranches = false;
-    }
+// Reemplaza la lista local y guarda en Firestore solo las sucursales que cambiaron
+export function commitBranches(branches) {
+    const previous = customBranches;
+    customBranches = branches;
+    saveLocalState(STORAGE_KEYS.branches, customBranches);
+    return commitListChanges(BRANCHES_COLLECTION, previous, customBranches, branchToDoc);
 }
 
 export function subscribeBranches(callback) {
     if (!db) return;
 
-    const branchesQuery = query(collection(db, "dashboard_branches"), orderBy("order", "asc"));
+    const branchesQuery = query(collection(db, BRANCHES_COLLECTION), orderBy("order", "asc"));
     onSnapshot(branchesQuery, async (snapshot) => {
         if (snapshot.empty) {
-            await syncBranchesToCloud();
+            await uploadList(BRANCHES_COLLECTION, customBranches, branchToDoc);
             return;
         }
 

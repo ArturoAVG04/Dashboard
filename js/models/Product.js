@@ -6,8 +6,11 @@ export class Product {
         category = 'General',
         availableInBranches = [],
         modifiers = [],
-        order = 0
+        order = 0,
+        ...extraFields
     } = {}) {
+        // Conserva campos que esta versión no conoce (compatibilidad hacia adelante)
+        Object.assign(this, extraFields);
         this.id = id;
         this.name = String(name || '').trim();
         this.price = Number(price) || 0;
@@ -78,4 +81,17 @@ export function moveProductInList(products, index, direction) {
 
 export function removeProductById(products, id) {
     return products.filter(product => product.id !== id);
+}
+
+// Orden de productos propio de cada sucursal (branch.productOrder = [productId, ...]).
+// Los productos que aún no están en esa lista van al final, en el orden general.
+export function sortProductsForBranch(products, branch) {
+    const order = Array.isArray(branch?.productOrder) ? branch.productOrder : [];
+    const position = new Map(order.map((id, index) => [id, index]));
+    return [...(products || [])].sort((a, b) => {
+        const pa = position.has(a.id) ? position.get(a.id) : Number.MAX_SAFE_INTEGER;
+        const pb = position.has(b.id) ? position.get(b.id) : Number.MAX_SAFE_INTEGER;
+        if (pa !== pb) return pa - pb;
+        return (Number(a.order) || 0) - (Number(b.order) || 0);
+    });
 }

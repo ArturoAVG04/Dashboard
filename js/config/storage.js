@@ -6,7 +6,14 @@ export const STORAGE_KEYS = {
     categories: 'customCategories',
     openTables: 'openTables',
     lastBranch: 'lastSelectedBranch',
-    branchColors: 'branchColorMap'
+    branchColors: 'branchColorMap',
+    expenseGroups: 'customExpenseGroups',
+    expenseGroupsExpanded: 'expenseGroupsExpanded',
+    productsTab: 'productsTab',
+    modifierGroups: 'customModifierGroups',
+    inventoryItems: 'inventoryItems',
+    sessions: 'dailySessions',
+    inventoryBranch: 'inventoryBranch'
 };
 
 function parseJSON(value, fallback) {
