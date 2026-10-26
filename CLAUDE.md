@@ -8,7 +8,7 @@ PWA de punto de venta y finanzas para un negocio de comida con varias sucursales
 ## Stack y reglas técnicas
 - HTML + CSS + **JavaScript vanilla con ES Modules**. Sin bundler, sin npm, sin framework.
 - Firebase 10.9.0 importado desde `gstatic.com`. Chart.js y Flatpickr por CDN. Iconos Phosphor (`ph ph-*`).
-- `js/config/firebase-config.js` está en `.gitignore` (credenciales). Nunca subirlo; usar `firebase-config.example.js` como plantilla.
+- `js/config/firebase-config.js` **va en git** (Vercel no lo genera; sin él la app no carga). Son claves web públicas de Firebase.
 - **Sin IA ni APIs externas** para métricas/recomendaciones: solo algoritmos locales (promedios, desviación, reglas).
 - Idioma de la UI, comentarios y commits: **español**. Moneda MXN (`formatMoney`).
 - Zona horaria: usar siempre los helpers de `js/core/date-utils.js` (`getLocalDateInputValue`, `isSameLocalDate`). No comparar fechas con `toISOString().slice(0,10)` directo.
@@ -31,6 +31,7 @@ js/app.js     orquestador: navegación (switchView), filtros de periodo, wiring 
 - Los servicios exponen `get*/set*/subscribe*` y guardan en LocalStorage al cambiar.
 - Colecciones Firestore actuales: `transactions`, `dashboard_products`, `dashboard_categories`, `dashboard_expense_tags` (campo `groupId`), `dashboard_expense_groups` (F2), `dashboard_modifier_groups` (F3), `inventory_items` (F4), `daily_sessions` (F5), `dashboard_branches`, `dashboard_tables`. Toda colección nueva debe agregarse a `BACKUP_COLLECTIONS` en `js/services/backup-service.js`.
 - Transacción de venta: `{type:'income', amount, branchId, itemsSoldArray[{productId, qty, price, modifiers, modifierText}], source:'sale'|'table', date, createdAt}`. Las ventas guardan snapshot (nombre/precio) para que el historial no cambie si se edita el producto.
+- **`getTransactions()` solo trae los últimos 90 días** hasta que algo pida más: cualquier vista que muestre fechas más viejas debe llamar `ensureHistoryFrom(fecha)` (app.js) o `loadFullHistory()` (transactions-service). Las vistas se vuelven a dibujar solas al llegar.
 - Hora de venta (desde F1): `soldAt` (ISO, hora real) + `timeEstimated` (true si se registró otro día sin hora); ítems de mesa/venta llevan `addedAt`. **Leer la hora siempre con `getSaleTimestamp(tx)`** de `date-utils.js` (maneja ventas viejas sin `soldAt` usando `createdAt`). Ventas con hora estimada no se usan en métricas por hora.
 
 ## Sistema de diseño (css/styles.css)
@@ -57,7 +58,7 @@ TZ=America/Mexico_City node --test tests/*.test.mjs   # pruebas de funciones pur
 
 ## Forma de trabajo acordada
 - Proponer plan y esperar visto bueno antes de cambios grandes.
-- **Cada vez que se publique (commit para desplegar), subir la versión** en `version.json` y en `index.html` (`css/styles.css?v=` y `js/app.js?v=`), las tres iguales (lo verifica `tests/version.test.mjs`). Con eso los dispositivos con una versión vieja ven el aviso centrado "Hay una versión nueva" (`js/core/app-version.js`). `vercel.json` manda `Cache-Control: no-cache` para que el navegador siempre revalide.
+- **Cada vez que se publique (commit para desplegar), subir la versión** en `index.html` (`css/styles.css?v=` y `js/app.js?v=`, iguales) para que los navegadores pidan los archivos nuevos. `vercel.json` manda `Cache-Control: no-cache`. (El aviso "Hay una versión nueva" se quitó a pedido del usuario: la página ya se actualiza sola.)
 - **Git solo cuando el usuario lo pida** ("haz commit"): rama `Buenaspracticas`, luego `main` (producción en Vercel). `js/config/firebase-config.js` **debe estar en git**: Vercel no lo genera y sin él la app no carga (el login solo recarga).
 - Migraciones de datos siempre **compatibles hacia atrás** (leer formato viejo, escribir el nuevo), nunca borrar datos históricos.
 
@@ -76,9 +77,12 @@ Orden: F0 → F1 → F2 → F7a → F3 → F4 → F5 → F6 → F7b → F8
 | F3 | Modificadores compartidos (`dashboard_modifier_groups`, `product.modifierGroupIds`; `modifiers` legado se conserva) | 🧪 implementado, en prueba local |
 | F4 | Artículos de inventario, consumo por producto/opción (`stockUsage`), costo (`unitCost`), `stockConsumption` en ventas | 🧪 implementado, en prueba local |
 | F5 | Jornada (apertura/En servicio) y Corte del día; casillas por sucursal `sessionsEnabled`, `inventoryEnabled`, `openMode`, `schedule` | 🧪 implementado, en prueba local |
-| F6 | Vista Cortes: métricas semanales y recomendaciones por sucursal × día de la semana | ⏳ |
-| F7b | Rendimiento: escuchar solo 90 días, histórico bajo demanda, aviso de almacenamiento lleno | ⏳ |
-| F8 | Comparativa de sucursales (requiere gasto con sucursal opcional) | futuro |
+| F6 | Jornadas → pestañas Hoy / Cortes / Semana: métricas semanales y recomendaciones (`js/analytics/forecast.js`, `js/ui/reports-ui.js`) | 🧪 implementado, en prueba local |
+| F7b-1 | Historial: 50 filas + "Ver más", búsqueda con espera de 250 ms y texto en caché, filtro de periodo propio (30 días por defecto; también aplica a Productos vendidos y Gastos por concepto) | 🧪 implementado, en prueba local |
+| F7b-2 | Firebase en vivo solo 90 días (`where date >=`); historial completo bajo demanda (`loadFullHistory`/`needsFullHistory`); LocalStorage guarda solo 90 días + pendientes (`temp_`) y avisa si se llena. IndexedDB no hizo falta: Firestore ya usa su caché persistente | 🧪 implementado, en prueba local (probar con Firebase real) |
+| F8 | Comparativa de sucursales en Principal (`js/analytics/branch-comparison.js`). Gasto con sucursal opcional (`branchId`/`zone`; General = `branchId: null`) | 🧪 implementado, en prueba local |
+| F8b | **Día trabajado** = día con venta o con jornada (aunque no venda). Venta y ganancia por día trabajado, días vs horario, días abiertos sin ventas, orden "Por día trabajado"/"Total". Ganancia = ventas − gastos de la sucursal; **los gastos generales no se reparten** (decisión del usuario hasta que asigne sucursal a sus gastos). Cortes se ven por sucursal | 🧪 implementado, en prueba local |
+| F8c | Métricas mejor tomadas (prácticas de Toast/food trucks): **día típico = mediana** con rango; pedidos y ticket por día por separado; **pedidos por hora** solo con jornadas completas (cerradas, no auto-abiertas, sin cierre estimado, ≥30 min, mínimo 3); cambio vs **mismos días de la semana** del periodo anterior; **franjas del día** (mañana/comida/tarde/noche); sucursales **de eventos** (`branch.isEvent`) se miden por evento; aviso de datos incompletos. Se quitó "ventas por hora" en dinero | 🧪 implementado, en prueba local |
 
 ### Reglas de negocio confirmadas por el usuario
 - **NUNCA modificar, borrar ni reescribir datos existentes en Firebase.** Solo colecciones nuevas y campos opcionales nuevos; datos viejos se adaptan al leerlos (en memoria).
@@ -87,7 +91,9 @@ Orden: F0 → F1 → F2 → F7a → F3 → F4 → F5 → F6 → F7b → F8
 - Métricas de tiempo siempre relativas a la **apertura real** (`openedAt`), no a la hora del reloj.
 - El inventario se descuenta **al cobrar** (también en mesas).
 - El sobrante **no pasa al día siguiente**: es merma.
-- El **conteo físico es obligatorio** al hacer corte en sucursales `stock`.
+- Corte: el conteo viene **prellenado con lo esperado**; solo se cambia si al contar no cuadra (no es obligatorio escribirlo).
+- Mesas: numeración por sucursal y por día que **continúa aunque se cobren** las mesas; se reinicia después del corte del día (`session.lastCutAt`, `nextTableName` en `js/models/Table.js`).
+- Venta: siempre abre con la **última sucursal usada en ventas** (`lastSaleBranch`, por dispositivo).
 - Recomendaciones sin IA: se recalculan con cada corte, por sucursal × día de la semana.
 
 ### Modelo de modificadores e inventario (F3/F4)
@@ -107,6 +113,11 @@ Orden: F0 → F1 → F2 → F7a → F3 → F4 → F5 → F6 → F7b → F8
 - Merma = todo lo que sobra al corte (no pasa al día siguiente). `difference` = debería quedar − contado (positivo = faltan piezas).
 - Horario fijo (`runScheduleTick`, cada minuto): abre y cierra solo en sucursales **sin** inventario; con inventario se abre al cargar y se cierra con conteo obligatorio. Jornadas viejas sin corte aparecen como "corte pendiente" con cierre estimado = última venta + 15 min.
 - En la venta: "Quedan N" por producto (descuenta lo que va en el pedido) y confirmación si algo está agotado; no aplica al editar una venta ya registrada.
+
+### Cortes y recomendaciones (F6)
+- Vista Jornadas con pestañas: **Hoy** (tarjetas), **Cortes** (historial por semana) y **Semana** (reporte por sucursal).
+- Algoritmos en `js/analytics/forecast.js` (puros, con pruebas): demanda estimada si se agotó (curva de ventas de la jornada), recomendación = promedio ponderado de los mismos días de la semana + 0.5·desviación (sin margen si sobra > 30%), confianza por número de jornadas, etiquetas (Estrella, Se queda corto, Estable, Le cuesta salir, Faltan piezas) y textos de recomendación.
+- Sucursales con inventario: recomendación por artículo; sin inventario: por producto (cuánto preparar). "¿Qué llevas hoy?" usa la recomendación del día.
 
 ### Glosario del dominio
 - **Artículo de inventario**: lo que se lleva físicamente (Burrito, Hamburguesa).

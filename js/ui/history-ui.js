@@ -2,6 +2,7 @@ import { formatMoney, normalizeText, getSaleTimestamp, formatTimeDisplay, escape
 import { getCustomExpenseTags } from '../services/products-service.js';
 import { getExpenseGroups } from '../services/expense-groups-service.js';
 import { getExpenseStatsByGroup } from '../models/ExpenseTag.js';
+import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
 import { formatExportDate } from './backup-ui.js';
 import { getTopSellerStats, getTopExpenseStats } from './dashboard-ui.js';
 import { getCustomProducts } from '../services/products-service.js';
@@ -10,6 +11,51 @@ let topSellersVisible = true;
 let topExpensesVisible = true;
 let historyTransactionsVisible = true;
 let topExpensesByGroup = false;
+
+// Rendimiento (F7b): se dibujan 50 filas a la vez, con periodo propio y texto de búsqueda en caché
+const HISTORY_PAGE = 50;
+let historyLimit = HISTORY_PAGE;
+let historyPeriod = loadLocalState(STORAGE_KEYS.historyPeriod, '30');
+const searchTextCache = new WeakMap();
+
+export function getHistoryPeriod() {
+    return historyPeriod;
+}
+
+export function setHistoryPeriod(period) {
+    historyPeriod = ['7', '30', '90', 'year', 'all'].includes(period) ? period : '30';
+    saveLocalState(STORAGE_KEYS.historyPeriod, historyPeriod);
+    historyLimit = HISTORY_PAGE;
+}
+
+export function resetHistoryPaging() {
+    historyLimit = HISTORY_PAGE;
+}
+
+export function showMoreHistory() {
+    historyLimit += HISTORY_PAGE;
+}
+
+function filterByHistoryPeriod(transactions, now = new Date()) {
+    if (historyPeriod === 'all') return transactions;
+    const start = historyPeriod === 'year'
+        ? new Date(now.getFullYear(), 0, 1)
+        : new Date(now.getFullYear(), now.getMonth(), now.getDate() - (Number(historyPeriod) - 1));
+    const startTime = start.getTime();
+    return transactions.filter(t => {
+        const time = new Date(t.date || t.createdAt || 0).getTime();
+        return time >= startTime;
+    });
+}
+
+function cachedSearchText(transaction) {
+    let text = searchTextCache.get(transaction);
+    if (text === undefined) {
+        text = getHistorySearchText(transaction);
+        searchTextCache.set(transaction, text);
+    }
+    return text;
+}
 
 export function setCollapsibleSectionState(panel, button, isVisible) {
     if (!panel || !button) return;
@@ -192,7 +238,8 @@ function renderTopExpensesByGroup(data, tbody) {
     `).join('');
 }
 
-export function renderFullHistory(transactions = [], { typeFilter = 'all', searchTerm = '' } = {}) {
+export function renderFullHistory(allTransactions = [], { typeFilter = 'all', searchTerm = '' } = {}) {
+    const transactions = filterByHistoryPeriod(allTransactions);
     renderTopSellers(transactions);
     renderTopExpenses(transactions);
 
@@ -201,6 +248,10 @@ export function renderFullHistory(transactions = [], { typeFilter = 'all', searc
     const historyTbody = document.getElementById('history-tbody');
     const historyTypeFilterSelect = document.getElementById('history-type-filter');
     const historySearchInput = document.getElementById('history-search');
+    const historyPeriodSelect = document.getElementById('history-period-filter');
+    const historyMore = document.getElementById('history-more');
+    if (historyPeriodSelect && historyPeriodSelect.value !== historyPeriod) historyPeriodSelect.value = historyPeriod;
+    if (historyMore) historyMore.innerHTML = '';
 
     setCollapsibleSectionState(historyTransactionsPanel, btnToggleHistoryTransactions, historyTransactionsVisible);
     if (historyTypeFilterSelect && historyTypeFilterSelect.value !== typeFilter) {
@@ -219,13 +270,22 @@ export function renderFullHistory(transactions = [], { typeFilter = 'all', searc
         : transactions.filter(t => t.type === typeFilter);
 
     const filtered = normalizedSearch
-        ? visibleTransactions.filter(t => getHistorySearchText(t).includes(normalizedSearch))
+        ? visibleTransactions.filter(t => cachedSearchText(t).includes(normalizedSearch))
         : visibleTransactions;
 
     if (filtered.length === 0) {
-        historyTbody.innerHTML = `<tr><td colspan="6" class="table-empty">Sin registros en el historial</td></tr>`;
+        historyTbody.innerHTML = `<tr><td colspan="6" class="table-empty">Sin registros${historyPeriod !== 'all' ? ' en este periodo. Prueba con "Todo" para buscar más atrás' : ' en el historial'}.</td></tr>`;
         return;
     }
 
-    filtered.forEach(t => historyTbody.appendChild(createTransactionRow(t, true)));
+    const fragment = document.createDocumentFragment();
+    filtered.slice(0, historyLimit).forEach(t => fragment.appendChild(createTransactionRow(t, true)));
+    historyTbody.appendChild(fragment);
+
+    if (historyMore) {
+        const shown = Math.min(historyLimit, filtered.length);
+        historyMore.innerHTML = filtered.length > shown
+            ? `<span>Mostrando ${shown} de ${filtered.length}</span><button type="button" class="btn btn-secondary btn-sm" data-history-action="more">Ver ${Math.min(HISTORY_PAGE, filtered.length - shown)} más</button>`
+            : `<span>${filtered.length} registro${filtered.length === 1 ? '' : 's'}</span>`;
+    }
 }

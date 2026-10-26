@@ -1,6 +1,7 @@
 import { formatMoney, escapeHtml, formatTimeDisplay } from '../core/date-utils.js';
 import { getOpenTables, getTodayTablesCount, deleteTable } from '../services/tables-service.js';
 import { getCustomBranches, getBranchNameById } from '../services/branches-service.js';
+import { getTableNumberingStart } from '../services/sessions-service.js';
 
 export function renderTablesBranchFilter() {
     const filterSelect = document.getElementById('tables-branch-filter');
@@ -29,7 +30,10 @@ export function renderTablesView(transactions = []) {
 
     const summaryBadge = document.getElementById('tables-today-summary-badge');
     if (summaryBadge) {
-        const count = getTodayTablesCount(branchId, transactions);
+        // Sin sucursal elegida se suman todas (cada una con su propio reinicio por corte)
+        const count = branchId
+            ? getTodayTablesCount(branchId, transactions, getTableNumberingStart(branchId))
+            : getCustomBranches().reduce((sum, branch) => sum + getTodayTablesCount(branch.id, transactions, getTableNumberingStart(branch.id)), 0);
         summaryBadge.innerHTML = `<i class="ph ph-table"></i> Mesas hoy: ${count}`;
     }
 

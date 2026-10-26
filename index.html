@@ -24,7 +24,7 @@
     <link rel="stylesheet" href="https://npmcdn.com/flatpickr/dist/themes/dark.css">
 
     <!-- Estilos propios -->
-    <link rel="stylesheet" href="css/styles.css?v=2.2.1">
+    <link rel="stylesheet" href="css/styles.css?v=2.3.0">
 
     <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
@@ -169,6 +169,21 @@
                     </div>
                 </section>
 
+                <section class="panel" id="branch-comparison-panel" hidden>
+                    <div class="panel-header">
+                        <div>
+                            <h3>Comparativa de sucursales</h3>
+                            <p class="panel-description" id="branch-comparison-period"></p>
+                        </div>
+                        <div class="segmented" role="group" aria-label="Ordenar comparativa" id="branch-comparison-sort">
+                            <button type="button" class="segmented-btn active" data-comparison-sort="perDay">Por día trabajado</button>
+                            <button type="button" class="segmented-btn" data-comparison-sort="total">Total</button>
+                        </div>
+                    </div>
+                    <ul class="insights-list" id="branch-comparison-insights"></ul>
+                    <div id="branch-comparison-grid" class="comparison-grid"></div>
+                </section>
+
                 <section class="panel daily-products-section">
                     <div class="panel-header">
                         <h3 id="daily-products-title">Productos vendidos</h3>
@@ -205,8 +220,34 @@
 
             <!-- ===== Jornadas ===== -->
             <div id="view-sessions" class="view">
-                <p class="view-intro">Apertura, inventario en vivo y corte del día de las sucursales que registran jornadas.</p>
-                <section id="sessions-section" class="sessions-section" aria-label="Jornadas de hoy"></section>
+                <div class="tabs" role="tablist" aria-label="Jornadas">
+                    <button type="button" class="tab active" role="tab" aria-selected="true" data-sessions-tab="today"><i class="ph ph-broadcast"></i> Hoy</button>
+                    <button type="button" class="tab" role="tab" aria-selected="false" data-sessions-tab="cuts"><i class="ph ph-scissors"></i> Cortes</button>
+                    <button type="button" class="tab" role="tab" aria-selected="false" data-sessions-tab="week"><i class="ph ph-chart-bar"></i> Semana</button>
+                </div>
+
+                <div data-sessions-panel="today" role="tabpanel">
+                    <p class="view-intro">Apertura, inventario en vivo y corte del día de las sucursales que registran jornadas.</p>
+                    <section id="sessions-section" class="sessions-section" aria-label="Jornadas de hoy"></section>
+                </div>
+
+                <div data-sessions-panel="cuts" role="tabpanel" hidden>
+                    <section class="panel">
+                        <div class="panel-header">
+                            <div>
+                                <h3>Cortes</h3>
+                                <p class="panel-description">Historial de jornadas cerradas. Abre cualquiera para ver su detalle.</p>
+                            </div>
+                        </div>
+                        <div id="cuts-branch-picker" class="cuts-branch-picker"></div>
+                        <div id="cuts-list" class="cuts-list"></div>
+                    </section>
+                </div>
+
+                <div data-sessions-panel="week" role="tabpanel" hidden>
+                    <div id="weekly-controls" class="weekly-controls"></div>
+                    <div id="weekly-report" class="weekly-report"></div>
+                </div>
             </div>
 
             <!-- ===== Historial ===== -->
@@ -219,6 +260,13 @@
                                 <i class="ph ph-magnifying-glass"></i>
                                 <input type="search" id="history-search" placeholder="Buscar producto, gasto, monto..." aria-label="Buscar en el historial">
                             </div>
+                            <select id="history-period-filter" class="select-compact" aria-label="Periodo del historial">
+                                <option value="7">Últimos 7 días</option>
+                                <option value="30">Últimos 30 días</option>
+                                <option value="90">Últimos 90 días</option>
+                                <option value="year">Este año</option>
+                                <option value="all">Todo</option>
+                            </select>
                             <select id="history-type-filter" class="select-compact" aria-label="Tipo de movimiento">
                                 <option value="all">Todos</option>
                                 <option value="income">Ventas</option>
@@ -244,6 +292,7 @@
                             <tbody id="history-tbody"></tbody>
                         </table>
                     </div>
+                    <div id="history-more" class="history-more"></div>
                 </section>
 
                 <div class="history-summaries">
@@ -563,6 +612,13 @@
                                 </span>
                             </label>
                             <label class="check-row">
+                                <input type="checkbox" id="manage-branch-event">
+                                <span>
+                                    <strong>Es para eventos</strong>
+                                    <small>Se abre solo algunas veces al año: sus métricas se miden por evento.</small>
+                                </span>
+                            </label>
+                            <label class="check-row">
                                 <input type="checkbox" id="manage-branch-sessions">
                                 <span>
                                     <strong>Registrar jornadas y métricas</strong>
@@ -705,22 +761,6 @@
         </div>
     </div>
 
-    <!-- ===================== Aviso de versión nueva ===================== -->
-    <div class="modal-overlay modal-overlay-update" id="update-modal">
-        <div class="modal update-modal" role="alertdialog" aria-modal="true" aria-labelledby="update-modal-title" aria-describedby="update-modal-text">
-            <div class="update-modal-body">
-                <div class="update-icon"><i class="ph-fill ph-arrow-circle-up"></i></div>
-                <h2 id="update-modal-title">Hay una versión nueva</h2>
-                <p id="update-modal-text">Se publicaron cambios en el dashboard. Actualiza para usar la versión más reciente.</p>
-                <p id="update-modal-versions" class="update-versions"></p>
-            </div>
-            <div class="modal-footer update-modal-footer">
-                <button type="button" class="btn btn-ghost" id="update-modal-dismiss">Ahora no</button>
-                <button type="button" class="btn btn-primary btn-lg" id="update-modal-apply"><i class="ph ph-arrows-clockwise"></i> Actualizar</button>
-            </div>
-        </div>
-    </div>
-
     <!-- ===================== Modal: jornada (abrir, reabastecer, corte) ===================== -->
     <div class="modal-overlay" id="session-modal">
         <div class="modal session-modal" role="dialog" aria-modal="true" aria-labelledby="session-modal-title">
@@ -797,6 +837,12 @@
                         </div>
                     </div>
 
+                    <div class="form-group">
+                        <label class="field-label" for="expense-branch">Sucursal (opcional)</label>
+                        <select id="expense-branch"></select>
+                        <span class="field-hint">Si el gasto es de una sola sucursal, elígela: así la comparativa calcula mejor la ganancia de cada una.</span>
+                    </div>
+
                     <div class="form-row">
                         <div class="form-group">
                             <label class="field-label" for="amount" id="amount-label">Monto del gasto</label>
@@ -822,6 +868,6 @@
     <script src="https://npmcdn.com/flatpickr/dist/l10n/es.js"></script>
 
     <!-- App -->
-    <script type="module" src="js/app.js?v=2.2.1"></script>
+    <script type="module" src="js/app.js?v=2.3.0"></script>
 </body>
 </html>

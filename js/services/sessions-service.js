@@ -31,6 +31,8 @@ export function sessionToDoc(session) {
         loads: Array.isArray(session.loads) ? session.loads : [],
         physicalCount: session.physicalCount || null,
         summary: session.summary || null,
+        // Hora del último corte del día: desde ahí se reinicia la numeración de mesas
+        lastCutAt: session.lastCutAt || null,
         updatedAt: new Date().toISOString()
     };
 }
@@ -119,7 +121,8 @@ export async function closeSession(sessionId, { closedAt = new Date(), closeSour
         closedAt: (closedAt instanceof Date ? closedAt : new Date(closedAt)).toISOString(),
         closeSource,
         physicalCount,
-        summary
+        summary,
+        lastCutAt: new Date().toISOString()
     });
 }
 
@@ -139,6 +142,12 @@ export async function ensureSessionForSale(branchId, saleDate = new Date()) {
     if (active) return active;
     if (getTodaySession(branchId, saleDate)?.status === 'closed') return null; // ya se hizo el corte de hoy
     return openSession(branchId, { openedAt: saleDate, openSource: 'auto-first-sale' });
+}
+
+// Desde cuándo se cuentan las mesas de hoy: después del último corte de hoy (o desde el inicio del día)
+export function getTableNumberingStart(branchId, now = new Date()) {
+    const cutAt = getTodaySession(branchId, now)?.lastCutAt;
+    return cutAt ? new Date(cutAt) : null;
 }
 
 export function subscribeSessions(callback) {

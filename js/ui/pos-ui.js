@@ -5,11 +5,11 @@ import { getCustomProducts } from '../services/products-service.js';
 import { getProductModifierGroups } from '../services/modifier-groups-service.js';
 import { describeModifierGroupRule } from '../models/ModifierGroup.js';
 import { computeStockConsumption, getProductUsage } from '../models/Inventory.js';
-import { ensureSessionForSale, getLiveStock } from '../services/sessions-service.js';
+import { ensureSessionForSale, getLiveStock, getTableNumberingStart } from '../services/sessions-service.js';
 import { getInventoryItems, getBranchInventoryItems } from '../services/inventory-service.js';
 import { getSessionLabelForSale } from './sessions-ui.js';
 import { getOpenTables, updateTable, createTable, deleteTable } from '../services/tables-service.js';
-import { saveTransaction, updateTransactionRecord } from '../services/transactions-service.js';
+import { saveTransaction, updateTransactionRecord, getTransactions } from '../services/transactions-service.js';
 import { calculateItemsTotal } from '../models/Table.js';
 import { sortProductsForBranch } from '../models/Product.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
@@ -135,12 +135,13 @@ export function renderSaleBranchOptions() {
 
     const customBranches = getCustomBranches();
     const currentVal = select.value;
-    select.innerHTML = customBranches.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+    select.innerHTML = customBranches.map(b => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('');
 
-    if (currentVal && customBranches.some(b => b.id === currentVal)) {
-        select.value = currentVal;
-    } else if (saleDraft.branchId && customBranches.some(b => b.id === saleDraft.branchId)) {
+    // Manda la sucursal de la venta en curso; el valor anterior del selector solo es respaldo
+    if (saleDraft.branchId && customBranches.some(b => b.id === saleDraft.branchId)) {
         select.value = saleDraft.branchId;
+    } else if (currentVal && customBranches.some(b => b.id === currentVal)) {
+        select.value = currentVal;
     } else if (customBranches[0]) {
         select.value = customBranches[0].id;
     }
@@ -689,8 +690,9 @@ export function startNewSale() {
     }
     activeSaleContext = { mode: 'sale', tableId: null };
     
+    // Siempre la última sucursal usada en ventas (se recuerda en este dispositivo hasta que la cambies)
     let initialBranchId = customBranches[0]?.id || '';
-    const lastBranchId = loadLocalState(STORAGE_KEYS.lastBranch, null);
+    const lastBranchId = loadLocalState(STORAGE_KEYS.lastSaleBranch, null) || loadLocalState(STORAGE_KEYS.lastBranch, null);
     if (lastBranchId && customBranches.some(b => b.id === lastBranchId)) {
         initialBranchId = lastBranchId;
     }
@@ -832,7 +834,7 @@ export function handleSaleBranchChange() {
     const saleBranchSelect = document.getElementById('sale-branch-select');
     const customBranches = getCustomBranches();
     saleDraft.branchId = saleBranchSelect?.value || customBranches[0]?.id || '';
-    saveLocalState(STORAGE_KEYS.lastBranch, saleDraft.branchId);
+    saveLocalState(STORAGE_KEYS.lastSaleBranch, saleDraft.branchId);
     renderSaleProducts();
     renderSaleSummary();
     updateSaleModalMeta();
@@ -883,7 +885,8 @@ export async function handleSalePrimaryAction({ onUpdate, switchView } = {}) {
     }
 
     if (branch.useTables && activeSaleContext.mode !== 'table') {
-        const table = createTable(branchId, saleDraft.items, saleDraft.total);
+        const table = createTable(branchId, saleDraft.items, saleDraft.total, getTransactions(), getTableNumberingStart(branchId));
+        saveLocalState(STORAGE_KEYS.lastSaleBranch, branchId);
         showToast(`${table.name} creada`);
         closeSaleModal();
         if (typeof onUpdate === 'function') onUpdate();
@@ -921,6 +924,7 @@ export async function handleSalePrimaryAction({ onUpdate, switchView } = {}) {
     });
 
     await saveTransaction(newTx);
+    saveLocalState(STORAGE_KEYS.lastSaleBranch, branchId);
     showToast("Venta guardada con éxito");
     closeSaleModal();
     if (typeof onUpdate === 'function') onUpdate();

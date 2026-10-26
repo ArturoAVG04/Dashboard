@@ -6,6 +6,12 @@ export const STORAGE_KEYS = {
     categories: 'customCategories',
     openTables: 'openTables',
     lastBranch: 'lastSelectedBranch',
+    lastSaleBranch: 'lastSaleBranch',
+    sessionsTab: 'sessionsTab',
+    historyPeriod: 'historyPeriod',
+    comparisonSort: 'comparisonSort',
+    cutsBranch: 'cutsBranch',
+    reportBranch: 'reportBranch',
     branchColors: 'branchColorMap',
     expenseGroups: 'customExpenseGroups',
     expenseGroupsExpanded: 'expenseGroupsExpanded',
@@ -36,10 +42,13 @@ export function loadLocalState(key, fallback) {
     }
 }
 
+// Devuelve false si no se pudo guardar (p. ej. almacenamiento lleno)
 export function saveLocalState(key, value) {
     try {
         localStorage.setItem(key, JSON.stringify(value));
+        return true;
     } catch (error) {
         console.warn('No se pudo guardar en almacenamiento local:', error);
+        return false;
     }
 }

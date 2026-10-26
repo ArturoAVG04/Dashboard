@@ -195,12 +195,22 @@ export function getTopExpenseStats(data) {
         });
 }
 
-export function renderBranchSalesSummary(data) {
+function dayText(stats) {
+    if (!stats?.workedDays) return '';
+    const n = stats.workedDays;
+    return stats.isEvent
+        ? ` · ${formatMoney(stats.salesPerDay)} por evento (${n} evento${n === 1 ? '' : 's'})`
+        : ` · día típico ${formatMoney(stats.typicalDay)} (${n} día${n === 1 ? '' : 's'})`;
+}
+
+export function renderBranchSalesSummary(data, dayStats = []) {
+    const statsById = new Map(dayStats.map(row => [row.branchId, row]));
     const branchSalesList = document.getElementById('branch-sales-list');
     if (!branchSalesList) return;
 
     const customBranches = getCustomBranches();
     const salesByBranch = customBranches.map(branch => ({
+        id: branch.id,
         name: branch.name,
         color: getStableBranchColor(branch),
         total: (data || [])
@@ -220,7 +230,7 @@ export function renderBranchSalesSummary(data) {
                     <strong>${formatMoney(branch.total)}</strong>
                 </div>
                 <div class="share-bar" aria-hidden="true"><span style="width:${share}%; background:${branch.color};"></span></div>
-                <small class="branch-sales-share">${share}% de las ventas</small>
+                <small class="branch-sales-share">${share}% de las ventas${dayText(statsById.get(branch.id))}</small>
             </div>
         `;
         }).join('');
@@ -292,3 +302,85 @@ export function renderProductsPeriodSummary(data, filterLabel = 'Resumen', produ
     });
 }
 
+
+// ---------- Comparativa de sucursales (F8/F8b) ----------
+export function renderBranchComparison({ comparison, insights, periodLabel, hasPrevious }) {
+    const panel = document.getElementById('branch-comparison-panel');
+    const grid = document.getElementById('branch-comparison-grid');
+    const list = document.getElementById('branch-comparison-insights');
+    const period = document.getElementById('branch-comparison-period');
+    if (!panel || !grid) return;
+
+    const branches = getCustomBranches();
+    if (branches.length < 2) {
+        panel.hidden = true;
+        return;
+    }
+    panel.hidden = false;
+    if (period) period.textContent = `${periodLabel}. Día trabajado = día con ventas o con jornada abierta. Día típico = la mitad de los días se vende más y la otra mitad menos.`;
+    document.querySelectorAll('[data-comparison-sort]').forEach(button => {
+        button.classList.toggle('active', button.dataset.comparisonSort === comparison.sortBy);
+    });
+
+    if (comparison.rows.length === 0) {
+        if (list) list.innerHTML = '';
+        grid.innerHTML = `<div class="empty-state empty-state-compact"><i class="ph ph-storefront"></i><p>Sin movimientos en este periodo</p></div>`;
+        return;
+    }
+
+    if (list) {
+        list.innerHTML = insights.map(insight => `<li class="insight insight-${insight.tone}"><i class="ph ${insight.tone === 'good' ? 'ph-trophy' : insight.tone === 'warn' ? 'ph-warning' : 'ph-info'}"></i><span>${escapeHtml(insight.text)}</span></li>`).join('');
+    }
+
+    const colorOf = (branchId) => {
+        const branch = branches.find(entry => entry.id === branchId);
+        return branch ? getStableBranchColor(branch) : 'var(--text-muted)';
+    };
+    const byDay = comparison.sortBy !== 'total';
+    const daypartColors = { morning: '#f59e0b', lunch: '#10b981', afternoon: '#0ea5e9', night: '#8b5cf6' };
+
+    grid.innerHTML = comparison.rows.map(row => {
+        const dayWord = row.isEvent ? 'evento' : 'día';
+        const timed = row.dayparts.some(part => part.share > 0);
+        return `
+        <article class="comparison-card${row.rank === 1 && comparison.rows.length > 1 ? ' is-best' : ''}">
+            <div class="comparison-head">
+                <span class="comparison-rank">#${row.rank}</span>
+                <span class="branch-sales-name"><span class="branch-color-dot" style="background:${colorOf(row.branchId)};"></span>${escapeHtml(row.name)}</span>
+                ${row.isEvent ? '<span class="tag"><i class="ph ph-confetti"></i> Eventos</span>' : ''}
+                ${hasPrevious && row.change !== null ? `<span class="comparison-change ${row.change >= 0 ? 'is-up' : 'is-down'}" title="Venta por ${dayWord} contra los mismos días de la semana del periodo anterior"><i class="ph ${row.change >= 0 ? 'ph-trend-up' : 'ph-trend-down'}"></i> ${Math.round(Math.abs(row.change) * 100)}%</span>` : ''}
+            </div>
+            <div class="comparison-profit">
+                <span>${byDay ? (row.isEvent ? 'Venta promedio por evento' : 'Día típico') : 'Ventas del periodo'}</span>
+                <strong class="text-success">${formatMoney(byDay ? (row.isEvent ? row.salesPerDay : row.typicalDay) : row.sales)}</strong>
+                <small>${row.workedDays} ${row.isEvent ? `evento${row.workedDays === 1 ? '' : 's'}` : `día${row.workedDays === 1 ? '' : 's'} trabajado${row.workedDays === 1 ? '' : 's'}`}${row.scheduledDays !== null ? ` de ${row.scheduledDays} de su horario` : ''}${row.workedDays > 1 ? ` · entre ${formatMoney(row.worstDay)} y ${formatMoney(row.bestDay)}` : ''}</small>
+            </div>
+            <dl class="comparison-stats">
+                <div><dt>${byDay ? 'Ventas del periodo' : (row.isEvent ? 'Promedio por evento' : 'Día típico')}</dt><dd>${formatMoney(byDay ? row.sales : (row.isEvent ? row.salesPerDay : row.typicalDay))}</dd></div>
+                <div><dt>Promedio por ${dayWord}</dt><dd>${formatMoney(row.salesPerDay)}</dd></div>
+                <div><dt>Pedidos por ${dayWord}</dt><dd>${row.ticketsPerDay}</dd></div>
+                <div><dt>Ticket promedio</dt><dd>${formatMoney(row.avgTicket)}</dd></div>
+                ${row.ordersPerHour !== null ? `<div><dt>Pedidos por hora</dt><dd>${row.ordersPerHour}</dd></div>` : ''}
+                ${row.daysWithoutSales > 0 ? `<div><dt>Días abiertos sin ventas</dt><dd>${row.daysWithoutSales}</dd></div>` : ''}
+                ${row.ownExpenses > 0 ? `<div><dt>Gastos de la sucursal</dt><dd>${formatMoney(row.ownExpenses)}</dd></div><div><dt>Ganancia por ${dayWord}</dt><dd>${formatMoney(row.profitPerDay)}</dd></div>` : ''}
+                ${row.wasteCost > 0 ? `<div><dt>Merma</dt><dd>${formatMoney(row.wasteCost)}</dd></div>` : ''}
+            </dl>
+            ${timed ? `
+                <div class="daypart-block">
+                    <span class="daypart-title">Venta por franja del día</span>
+                    <div class="daypart-bar">
+                        ${row.dayparts.filter(part => part.share > 0).map(part => `<span style="width:${Math.max(2, Math.round(part.share * 100))}%; background:${daypartColors[part.key]};" title="${part.label}: ${formatMoney(part.sales)} · ${Math.round(part.share * 100)}%"></span>`).join('')}
+                    </div>
+                    <div class="daypart-legend">
+                        ${row.dayparts.filter(part => part.share > 0).map(part => `<span><i style="background:${daypartColors[part.key]};"></i>${part.label} ${Math.round(part.share * 100)}%</span>`).join('')}
+                    </div>
+                </div>` : ''}
+            ${row.incompleteSessions > 0 || row.estimatedTimeSales > 0 ? `<p class="data-quality"><i class="ph ph-warning-circle"></i> ${[
+                row.incompleteSessions > 0 ? `${row.incompleteSessions} jornada${row.incompleteSessions === 1 ? '' : 's'} con horario incompleto` : '',
+                row.estimatedTimeSales > 0 ? `${row.estimatedTimeSales} venta${row.estimatedTimeSales === 1 ? '' : 's'} sin hora` : ''
+            ].filter(Boolean).join(' · ')}</p>` : ''}
+            <small class="branch-sales-share">${Math.round(row.salesShare * 100)}% de las ventas del periodo</small>
+        </article>
+    `;
+    }).join('');
+}

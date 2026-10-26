@@ -25,6 +25,7 @@ import {
     formatDuration,
     computeItemSalesHistory
 } from '../analytics/session-metrics.js';
+import { buildItemRecommendations } from '../analytics/forecast.js';
 
 let modalState = null; // { mode: 'open'|'restock'|'cut'|'view', branchId, sessionId }
 let onChangeCallback = null;
@@ -211,8 +212,21 @@ export function closeSessionModal() {
 }
 
 // Sugerencia simple: lo que se llevó el mismo día de la semana anterior (o la última jornada)
+// Sugerencia de carga: la recomendación del algoritmo para el día de hoy (F6) o,
+// si aún no hay jornadas cerradas, lo que se llevó la última vez.
 function getLoadSuggestion(branchId) {
     const today = new Date().getDay();
+    const recommendations = buildItemRecommendations(getSessions(), getTransactions(), branchId, getBranchInventoryItems(branchId), today, { beforeDateKey: getTodayKeyLocal() });
+    if (recommendations.length > 0) {
+        const confidence = recommendations.some(entry => entry.confidence === 'alta') ? 'alta'
+            : recommendations.some(entry => entry.confidence === 'media') ? 'media' : 'baja';
+        return {
+            totals: new Map(recommendations.map(entry => [entry.itemId, entry.qty])),
+            label: `Recomendado para hoy según tus jornadas anteriores (confianza ${confidence})`,
+            chip: 'Recomendado'
+        };
+    }
+
     const previous = getSessions()
         .filter(session => session.branchId === branchId && (session.loads || []).length > 0 && session.dateKey < getTodayKeyLocal())
         .sort((a, b) => b.dateKey.localeCompare(a.dateKey));
@@ -221,7 +235,7 @@ function getLoadSuggestion(branchId) {
     if (!source) return null;
     const totals = new Map();
     source.loads.forEach(load => totals.set(load.itemId, (totals.get(load.itemId) || 0) + (Number(load.qty) || 0)));
-    return { totals, label: `${sameDay ? 'Igual que el' : 'Como la última vez,'} ${formatDateKey(source.dateKey)}` };
+    return { totals, label: `${sameDay ? 'Igual que el' : 'Como la última vez,'} ${formatDateKey(source.dateKey)}`, chip: 'Sugerido' };
 }
 
 function getTodayKeyLocal() {
@@ -265,7 +279,7 @@ export function openLoadModal(branchId, mode = 'open') {
                     <small>${mode === 'restock' && current ? `Quedan ${current.remaining} de ${current.loaded} · ` : ''}${historyText}</small>
                     <small>${price ? `Precio medio ${formatMoney(price.unitPrice)} por ${unit}${price.basis === 'history' ? ' (según tus ventas)' : ' (según el menú)'}` : 'Ningún producto lo descuenta: configúralo en Inventario'}</small>
                 </div>
-                ${suggested ? `<button type="button" class="suggest-chip" data-session-modal="suggest" data-item-id="${escapeHtml(item.id)}" data-qty="${suggested}">Sugerido ${suggested}</button>` : '<span></span>'}
+                ${suggested ? `<button type="button" class="suggest-chip" data-session-modal="suggest" data-item-id="${escapeHtml(item.id)}" data-qty="${suggested}">${escapeHtml(suggestion.chip)} ${suggested}</button>` : '<span></span>'}
                 <input type="number" class="load-qty" data-item-id="${escapeHtml(item.id)}" data-unit-price="${price?.unitPrice ?? ''}" min="0" step="any" inputmode="decimal" placeholder="0" aria-label="Cantidad de ${escapeHtml(item.name)}">
                 <span class="load-expected" data-expected-for="${escapeHtml(item.id)}"></span>
             </div>
@@ -381,7 +395,7 @@ export function openCutModal(sessionId, { readOnly = false } = {}) {
     const items = summary.items.length > 0 ? `
         <div class="cut-section">
             <h4>Inventario</h4>
-            ${needsCount && !readOnly ? '<p class="field-hint">Cuenta lo que sobró de cada artículo. Todo lo que sobra se registra como merma.</p>' : ''}
+            ${needsCount && !readOnly ? '<p class="field-hint">Ya viene lo que debería sobrar según las ventas. Si al contar no cuadra, cámbialo; si sí, solo confirma el corte. Todo lo que sobra se registra como merma.</p>' : ''}
             <div class="cut-items">
                 ${summary.items.map(item => `
                     <div class="cut-item" data-item-id="${escapeHtml(item.itemId)}" data-expected="${item.expectedLeft}" data-loaded="${item.loaded}" data-cost="${(getInventoryItems().find(i => i.id === item.itemId)?.unitCost) ?? ''}">
@@ -398,8 +412,8 @@ export function openCutModal(sessionId, { readOnly = false } = {}) {
                         <div class="cut-item-count">
                             ${readOnly
                                 ? `<span>Contado <b>${item.counted ?? '—'}</b></span>`
-                                : `<label>Sobró (conteo real) <input type="number" class="cut-count" min="0" step="any" inputmode="decimal" value="${item.counted ?? ''}" placeholder="${item.expectedLeft}" ${needsCount ? 'required' : ''}></label>`}
-                            <span class="cut-result">${renderCutResult(item.counted, item.expectedLeft, getInventoryItems().find(i => i.id === item.itemId)?.unitCost ?? null)}</span>
+                                : `<label>Sobró <input type="number" class="cut-count" min="0" step="any" inputmode="decimal" value="${item.counted ?? item.expectedLeft}" aria-label="Piezas que sobraron de ${escapeHtml(item.name)}"></label>`}
+                            <span class="cut-result">${renderCutResult(readOnly ? item.counted : (item.counted ?? item.expectedLeft), item.expectedLeft, getInventoryItems().find(i => i.id === item.itemId)?.unitCost ?? null)}</span>
                         </div>
                     </div>
                 `).join('')}
@@ -462,18 +476,13 @@ export function handleSessionModalInput(event) {
 async function confirmCut() {
     const session = getSessionById(modalState?.sessionId);
     if (!session) return;
-    const config = getBranchSessionConfig(getBranchById(session.branchId));
+    // El conteo viene lleno con lo esperado; si se dejó vacío se toma lo esperado
     const physicalCount = {};
-    let missing = 0;
     document.querySelectorAll('#session-modal-body .cut-item').forEach(card => {
         const value = card.querySelector('.cut-count')?.value;
-        if (value === '' || value === undefined) missing += 1;
-        else physicalCount[card.dataset.itemId] = Math.max(0, parseFloat(value) || 0);
+        const expected = Number(card.dataset.expected) || 0;
+        physicalCount[card.dataset.itemId] = value === '' || value === undefined ? expected : Math.max(0, parseFloat(value) || 0);
     });
-    if (config.inventoryEnabled && missing > 0) {
-        showToast("Anota el conteo real de todos los artículos (0 si no sobró nada)");
-        return;
-    }
 
     const timeValue = document.getElementById('cut-close-time')?.value;
     let closedAt = combineLocalDateAndTime(session.dateKey, timeValue) || new Date();

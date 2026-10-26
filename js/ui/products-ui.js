@@ -621,8 +621,10 @@ export function renderManageBranches() {
 
 function branchSessionTags(branch) {
     const config = getBranchSessionConfig(branch);
-    if (!config.sessionsEnabled) return '';
+    const eventTag = branch.isEvent ? '<span class="tag"><i class="ph ph-confetti"></i> Eventos</span>' : '';
+    if (!config.sessionsEnabled) return eventTag;
     return [
+        eventTag,
         '<span class="tag"><i class="ph ph-chart-line"></i> Jornadas</span>',
         config.inventoryEnabled ? '<span class="tag"><i class="ph ph-cube"></i> Inventario</span>' : '',
         `<span class="tag">${config.openMode === 'schedule' ? '<i class="ph ph-clock"></i> Horario fijo' : '<i class="ph ph-power"></i> Botón'}</span>`
@@ -683,6 +685,8 @@ function fillBranchSessionFields(branch = null) {
     const config = getBranchSessionConfig(branch);
     const sessionsInput = document.getElementById('manage-branch-sessions');
     const inventoryInput = document.getElementById('manage-branch-inventory');
+    const eventInput = document.getElementById('manage-branch-event');
+    if (eventInput) eventInput.checked = Boolean(branch?.isEvent);
     if (sessionsInput) sessionsInput.checked = config.sessionsEnabled;
     if (inventoryInput) inventoryInput.checked = config.inventoryEnabled;
     document.querySelectorAll('input[name="manage-branch-open-mode"]').forEach(input => {
@@ -718,6 +722,7 @@ export function saveManagedBranch() {
 
     const sessionsEnabled = Boolean(document.getElementById('manage-branch-sessions')?.checked);
     const sessionConfig = {
+        isEvent: Boolean(document.getElementById('manage-branch-event')?.checked),
         sessionsEnabled,
         inventoryEnabled: sessionsEnabled && Boolean(document.getElementById('manage-branch-inventory')?.checked),
         openMode: document.querySelector('input[name="manage-branch-open-mode"]:checked')?.value === 'schedule' ? 'schedule' : 'manual',

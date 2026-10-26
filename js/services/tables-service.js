@@ -2,7 +2,7 @@ import { db } from '../config/firebase-config.js';
 import { collection, onSnapshot, query, orderBy, doc, addDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
 import { isSameLocalDate } from '../core/date-utils.js';
-import { normalizeOpenTables, calculateItemsTotal, Table } from '../models/Table.js';
+import { normalizeOpenTables, calculateItemsTotal, Table, countTodayTables, nextTableName } from '../models/Table.js';
 
 let openTables = normalizeOpenTables(loadLocalState(STORAGE_KEYS.openTables, []));
 
@@ -19,35 +19,17 @@ export function getTableById(tableId) {
     return openTables.find(table => table.id === tableId) || null;
 }
 
-export function getTodayTablesCount(branchId, transactions = []) {
-    const openCount = openTables.filter(t => t.status === 'open' && isSameLocalDate(t.createdAt) && (!branchId || t.branchId === branchId)).length;
-    const closedCount = (transactions || []).filter(t => t.source === 'table' && isSameLocalDate(t.date || t.createdAt) && (!branchId || t.branchId === branchId || t.branch === branchId)).length;
-    return openCount + closedCount;
+export function getTodayTablesCount(branchId, transactions = [], since = null) {
+    return countTodayTables(openTables, transactions, branchId, since);
 }
 
-export function getNextTableName(branchId, transactions = []) {
-    const openTodayNumbers = openTables
-        .filter(table => table.status === 'open' && isSameLocalDate(table.createdAt) && (!branchId || table.branchId === branchId))
-        .map(table => {
-            const match = (table.name || '').match(/(\d+)/);
-            return match ? parseInt(match[1], 10) : 0;
-        });
-
-    const closedTodayNumbers = (transactions || [])
-        .filter(t => t.source === 'table' && isSameLocalDate(t.date || t.createdAt) && (!branchId || t.branchId === branchId || t.branch === branchId))
-        .map(t => {
-            const match = (t.tableName || t.desc || '').match(/Mesa\s*(\d+)/i);
-            return match ? parseInt(match[1], 10) : 0;
-        });
-
-    const allTodayNumbers = [...openTodayNumbers, ...closedTodayNumbers].filter(num => num > 0);
-    const maxNumber = allTodayNumbers.length > 0 ? Math.max(...allTodayNumbers) : 0;
-
-    return `Mesa ${maxNumber + 1}`;
+// Siguiente número de mesa del día: continúa aunque las anteriores ya se hayan cobrado
+export function getNextTableName(branchId, transactions = [], since = null) {
+    return nextTableName(openTables, transactions, branchId, since);
 }
 
-export function createTable(branchId, initialItems = [], initialTotal = 0, transactions = []) {
-    const tableName = getNextTableName(branchId, transactions);
+export function createTable(branchId, initialItems = [], initialTotal = 0, transactions = [], since = null) {
+    const tableName = getNextTableName(branchId, transactions, since);
     const newTable = new Table({
         id: `table_${Date.now()}`,
         branchId: branchId || '',

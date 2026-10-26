@@ -339,3 +339,59 @@ Generadas con reglas, ej.:
 ## Orden actualizado
 
 F0 Respaldo JSON → F1 Hora de venta → F2 Gastos → F7a Sync por documento (quita el riesgo H2) → F3 Modificadores → F4 Inventario/costos → F5 Jornada y corte (modos `stock`/`metrics`) → F6 Cortes y recomendaciones → F7b Rendimiento (90 días, IndexedDB) → F8 Comparativa de sucursales.
+
+---
+
+## F7b — Rendimiento: historial lento (siguiente fase, pendiente de visto bueno)
+
+**Diagnóstico (2026-10-26):**
+- Al abrir Historial se crea una fila por **cada** venta y gasto desde el inicio (miles de filas en el DOM).
+- Cada tecla en el buscador vuelve a filtrar y dibujar todo, y recalcula el texto de búsqueda de cada fila.
+- "Productos vendidos" y "Gastos por concepto" también recorren todas las transacciones.
+- La app escucha **toda** la colección `transactions` de Firebase al abrir (más lecturas y más lento al cargar) y guarda todo en LocalStorage (límite ~5 MB).
+
+**Propuesta, en orden (de lo más rápido y seguro a lo más profundo):**
+
+| Paso | Qué | Efecto | Riesgo |
+|---|---|---|---|
+| 1 | Mostrar las primeras **50** filas y botón "Ver más" (el buscador sigue buscando en todo) | El historial abre al instante | Nulo |
+| 2 | **Esperar 250 ms** después de escribir antes de buscar, y precalcular el texto de búsqueda de cada transacción una sola vez | Escribir ya no se traba | Nulo |
+| 3 | Agregar al Historial un filtro de periodo propio (por defecto **últimos 30 días**, con opción "Todo") | Menos filas y resúmenes más rápidos | Bajo (es solo vista) |
+| 4 | Escuchar en vivo solo los **últimos 90 días** de Firebase; lo más viejo se pide al elegir "Año"/"Todo" o al buscar más atrás | Carga inicial y lecturas de Firebase mucho menores | Medio: hay que cuidar Respaldos/Excel y Cortes para que pidan lo viejo cuando lo necesiten |
+| 5 | Pasar el respaldo local de transacciones de LocalStorage a **IndexedDB** (sin límite práctico) y avisar si el almacenamiento se llena | Evita que el respaldo local deje de guardarse sin aviso | Medio |
+
+**Recomendación:** hacer 1–3 juntos (no tocan datos ni Firebase, mejora inmediata) y después 4–5 como segunda parte.
+
+---
+
+## F8b — Métricas por día trabajado (pendiente de visto bueno)
+
+**Problema:** hoy la comparativa suma todo el periodo. Una sucursal que abre 2 días por semana (La Presa) se ve "peor" que una que abre 5 (Noria), aunque venda más por cada día que abre. Los eventos solo abren unas veces al año.
+
+**Qué es un "día trabajado"** (por sucursal, se calcula; no hay que capturar nada):
+- Un día con **al menos una venta** de esa sucursal, **o**
+- Un día con **jornada registrada** (puesta "En servicio" o abierta por horario), **aunque no haya vendido nada**. Así Noria cuenta sus días abiertos sin ventas.
+- Los días sin ventas y sin jornada **no cuentan**. Por ejemplo, en la Uni los días que no se llevó nada.
+- Los días que solo tienen gastos no cuentan como trabajados.
+
+**Métricas nuevas en la comparativa:**
+| Métrica | Cálculo |
+|---|---|
+| Días trabajados | Días distintos que cumplen la regla anterior en el periodo |
+| **Venta promedio por día trabajado** | Ventas ÷ días trabajados |
+| **Ganancia por día trabajado** | Ganancia ÷ días trabajados |
+| Días con jornada sin ventas | Útil para Noria: días que abrió y no vendió |
+| Días programados vs. trabajados (si tiene horario) | Ej. Noria: 22 días hábiles en el mes, trabajó 20 |
+| Proyección anual (opcional) | Ganancia por día × días que normalmente abre al año (según su horario o su ritmo real) |
+
+**Cambios en la vista:**
+- Selector **"Ordenar por: Ganancia total / Por día trabajado"**. Por defecto, por día trabajado.
+- Cada tarjeta muestra "N días trabajados" junto al promedio diario.
+- Recomendaciones por día trabajado. Ej.: "La Presa abre 2 días por semana pero vende $X por día, más que Noria ($Y)". Para eventos: "N eventos en el periodo, $X en promedio por evento".
+- El "Ventas por sucursal" de Principal también muestra el promedio por día trabajado.
+
+**Decisiones a confirmar:**
+1. Gastos generales: seguir repartiéndolos **según las ventas** (recomendado) o **según los días trabajados**.
+2. ¿Un día con jornada abierta pero **0 ventas** cuenta como trabajado? (Recomendado: sí; así lo pediste para Noria.)
+
+**Código:** `computeBranchComparison` recibe las fechas de jornadas por sucursal y calcula `workedDays`, `salesPerDay` y `profitPerDay`, con pruebas. No hay datos nuevos ni cambios en Firebase.

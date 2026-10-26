@@ -4,7 +4,6 @@ import { STORAGE_KEYS, loadLocalState, saveLocalState } from './config/storage.j
 import { authenticate, isAuthenticated } from './core/auth.js';
 import { getLocalDateInputValue, createLocalDateFromInput, isSameLocalDate } from './core/date-utils.js';
 import { showToast, scrollToTop, initModalScrollLock } from './core/ui-feedback.js';
-import { initUpdateChecker } from './core/app-version.js';
 
 // Services
 import {
@@ -27,6 +26,9 @@ import {
 } from './services/tables-service.js';
 import {
     getTransactions,
+    needsFullHistory,
+    loadFullHistory,
+    setStorageWarningHandler,
     fetchTransactions,
     deleteTransactionRecord,
     syncStrandedOfflineTransactions
@@ -46,6 +48,7 @@ import {
     updateDashboardSummaryCards,
     renderRecentTransactions,
     renderBranchSalesSummary,
+    renderBranchComparison,
     renderProductsPeriodSummary,
     getTopSellerStats
 } from './ui/dashboard-ui.js';
@@ -58,6 +61,10 @@ import {
     toggleTopSellersSection,
     toggleTopExpensesSection,
     toggleTopExpensesMode,
+    setHistoryPeriod,
+    getHistoryPeriod,
+    resetHistoryPaging,
+    showMoreHistory,
     setCollapsibleSectionState,
     toggleHistoryTransactionsSection
 } from './ui/history-ui.js';
@@ -95,7 +102,12 @@ import {
     runScheduleTick,
     setSessionsChangeHandler
 } from './ui/sessions-ui.js';
-import { subscribeSessions } from './services/sessions-service.js';
+import { subscribeSessions, getSessions } from './services/sessions-service.js';
+import { getPeriodRange, isInRange, computeBranchComparison, generateBranchInsights } from './analytics/branch-comparison.js';
+import { computeSessionSummary } from './analytics/session-metrics.js';
+import { getInventoryItems } from './services/inventory-service.js';
+import { formatMoney } from './core/date-utils.js';
+import { initSessionsTabs, renderSessionsView, handleReportsClick } from './ui/reports-ui.js';
 import {
     renderManageModifiers,
     toggleModifierForm,
@@ -221,7 +233,7 @@ export function switchView(viewName) {
     if (headerControls) headerControls.hidden = !VIEWS_WITH_PERIOD_FILTERS.includes(viewName);
 
     if (viewName === 'dashboard') updateDashboard();
-    if (viewName === 'sessions') renderSessionsSection();
+    if (viewName === 'sessions') renderSessionsView();
     if (viewName === 'tables') renderTablesView(getTransactions());
     if (viewName === 'transactions') renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
     if (viewName === 'products') {
@@ -238,6 +250,56 @@ export function switchView(viewName) {
 }
 
 // Data Filtering & Calculations
+// Si el periodo elegido (o el anterior, para comparar) va más atrás de los últimos 90 días,
+// se carga el historial completo una vez
+function getDashboardRangeStart() {
+    if (currentFilter === 'all') return null;
+    const range = getPeriodRange(currentFilter, new Date(), customStartDate, customEndDate);
+    return range.previous?.start || range.start || new Date();
+}
+
+// Comparativa de sucursales (F8): usa solo el periodo (no el filtro Ventas/Gastos)
+let comparisonSort = loadLocalState(STORAGE_KEYS.comparisonSort, 'perDay');
+function renderDashboardBranchComparison() {
+    const range = getPeriodRange(currentFilter, new Date(), customStartDate, customEndDate);
+    const all = getTransactions();
+    const transactions = all.filter(t => isInRange(t, range));
+    const previousTransactions = range.previous ? all.filter(t => isInRange(t, range.previous)) : null;
+    const inRangeKey = (dateKey) => {
+        const date = new Date(`${dateKey}T12:00:00`);
+        return (!range.start || date >= range.start) && (!range.end || date <= range.end);
+    };
+    const sessionSummaries = getSessions()
+        .filter(session => inRangeKey(session.dateKey))
+        .map(session => {
+            const summary = session.summary || computeSessionSummary(session, all, getInventoryItems());
+            return {
+                branchId: session.branchId,
+                dateKey: session.dateKey,
+                status: session.status,
+                openSource: session.openSource,
+                closeSource: session.closeSource,
+                durationMinutes: summary.durationMinutes,
+                ticketCount: summary.ticketCount,
+                wasteCost: summary.totals?.wasteCost || 0
+            };
+        });
+    const comparison = computeBranchComparison({ branches: getCustomBranches(), transactions, previousTransactions, sessionSummaries, range, sortBy: comparisonSort });
+    renderBranchComparison({
+        comparison,
+        insights: generateBranchInsights(comparison, { money: formatMoney }),
+        periodLabel: currentFilter === 'all' ? 'Todo el historial' : `${getFilterLabel()}${range.previous ? ' · el % compara la venta por día con los mismos días de la semana del periodo anterior' : ''}`,
+        hasPrevious: Boolean(range.previous)
+    });
+    return comparison;
+}
+
+export function ensureHistoryFrom(startDate) {
+    if (!needsFullHistory(startDate)) return;
+    showToast("Cargando historial completo...", 'success');
+    loadFullHistory().catch(() => showToast("No se pudo cargar el historial completo. Revisa tu conexión."));
+}
+
 export function getFilteredData() {
     const now = new Date();
     const transactions = getTransactions();
@@ -299,7 +361,8 @@ export function updateDashboard() {
 
     updateDashboardSummaryCards(filtered);
     renderRecentTransactions(filtered);
-    renderBranchSalesSummary(filtered);
+    const comparison = renderDashboardBranchComparison();
+    renderBranchSalesSummary(filtered, comparison?.rows || []);
     renderProductsPeriodSummary(filtered, getFilterLabel(), customProducts);
     updateCharts(filtered);
 }
@@ -336,6 +399,13 @@ function setupEventListeners() {
     navBtns.products?.addEventListener('click', () => switchView('products'));
     navBtns.backup?.addEventListener('click', () => switchView('backup'));
     document.getElementById('btn-view-all')?.addEventListener('click', () => switchView('transactions'));
+    document.getElementById('branch-comparison-sort')?.addEventListener('click', (e) => {
+        const button = e.target.closest('[data-comparison-sort]');
+        if (!button) return;
+        comparisonSort = button.dataset.comparisonSort === 'total' ? 'total' : 'perDay';
+        saveLocalState(STORAGE_KEYS.comparisonSort, comparisonSort);
+        renderDashboardBranchComparison();
+    });
     document.getElementById('btn-toggle-recent-transactions')?.addEventListener('click', (e) => {
         recentTransactionsVisible = !recentTransactionsVisible;
         setCollapsibleSectionState(document.getElementById('recent-transactions-panel'), e.currentTarget, recentTransactionsVisible);
@@ -363,6 +433,7 @@ function setupEventListeners() {
                     customStartDate = selectedDates[0];
                     customEndDate = selectedDates[1];
                     currentFilter = 'custom';
+                    ensureHistoryFrom(customStartDate);
                     filterBtns.forEach(b => b.classList.remove('active'));
                     customDateTrigger.classList.add('active');
                     customDateLabel = `del ${customStartDate.toLocaleDateString('es-ES')} al ${customEndDate.toLocaleDateString('es-ES')}`;
@@ -385,6 +456,7 @@ function setupEventListeners() {
             }
             tgt.classList.add('active');
             currentFilter = tgt.dataset.filter;
+            ensureHistoryFrom(getDashboardRangeStart());
             updateDashboard();
         });
     });
@@ -412,11 +484,31 @@ function setupEventListeners() {
 
     historyTypeFilterSelect?.addEventListener('change', () => {
         historyTypeFilter = historyTypeFilterSelect.value || 'all';
+        resetHistoryPaging();
         renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
     });
 
+    // Espera a que se deje de escribir para no redibujar en cada tecla
+    let historySearchTimer = null;
     historySearchInput?.addEventListener('input', () => {
-        historySearchTerm = historySearchInput.value || '';
+        clearTimeout(historySearchTimer);
+        historySearchTimer = setTimeout(() => {
+            historySearchTerm = historySearchInput.value || '';
+            resetHistoryPaging();
+            renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+        }, 250);
+    });
+
+    document.getElementById('history-period-filter')?.addEventListener('change', (e) => {
+        setHistoryPeriod(e.target.value);
+        if (e.target.value === 'all') ensureHistoryFrom(null);
+        if (e.target.value === 'year') ensureHistoryFrom(new Date(new Date().getFullYear(), 0, 1));
+        renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
+    });
+
+    document.getElementById('history-more')?.addEventListener('click', (e) => {
+        if (!e.target.closest('[data-history-action="more"]')) return;
+        showMoreHistory();
         renderFullHistory(getTransactions(), { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
     });
 
@@ -654,7 +746,10 @@ function setupEventListeners() {
     setSessionsChangeHandler(() => {
         updateDashboard();
         renderSaleProducts();
+        if (views.sessions?.classList.contains('active-view')) renderSessionsView();
     });
+    document.getElementById('view-sessions')?.addEventListener('click', handleReportsClick);
+    initSessionsTabs();
 
     const manageNewExpenseForm = document.getElementById('manage-new-expense-form');
     document.getElementById('btn-add-expense-manage')?.addEventListener('click', () => {
@@ -845,7 +940,6 @@ function init() {
     initAuth();
     setupEventListeners();
     initModalScrollLock();
-    initUpdateChecker();
 
     // Initial Subscriptions & Sync
     subscribeProducts(() => {
@@ -877,6 +971,7 @@ function init() {
     subscribeSessions(() => {
         renderSessionsSection();
         renderSaleProducts();
+        if (views.sessions?.classList.contains('active-view')) renderSessionsView();
     });
 
     // Horario fijo y duración en vivo: revisa cada minuto
@@ -909,13 +1004,18 @@ function init() {
         renderTablesView(getTransactions());
     });
 
+    setStorageWarningHandler(() => showToast("El almacenamiento del dispositivo está lleno: la copia local no se pudo actualizar. Tus datos siguen guardados en la nube."));
     fetchTransactions((transactions) => {
         updateDashboard();
         renderTablesView(transactions);
         if (views.transactions?.classList.contains('active-view')) {
             renderFullHistory(transactions, { typeFilter: historyTypeFilter, searchTerm: historySearchTerm });
         }
+        if (views.sessions?.classList.contains('active-view')) renderSessionsView();
     });
+    // Si el historial quedó guardado en "Este año" o "Todo", se carga lo viejo al iniciar
+    if (getHistoryPeriod() === 'all') ensureHistoryFrom(null);
+    if (getHistoryPeriod() === 'year') ensureHistoryFrom(new Date(new Date().getFullYear(), 0, 1));
 
     syncStrandedOfflineTransactions();
 

@@ -105,6 +105,7 @@ export function branchToDoc(branch, index) {
         order: typeof branch.order === 'number' ? branch.order : index,
         // Configuración de jornadas (F5). En sucursales sin configurar estos valores por defecto
         // coinciden con los de la lista anterior, así que no se escriben hasta que se editan.
+        isEvent: Boolean(branch.isEvent),
         sessionsEnabled: Boolean(branch.sessionsEnabled),
         inventoryEnabled: Boolean(branch.inventoryEnabled),
         openMode: branch.openMode === 'schedule' ? 'schedule' : 'manual',

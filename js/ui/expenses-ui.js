@@ -3,7 +3,7 @@ import { showToast } from '../core/ui-feedback.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
 import { getCustomExpenseTags, upsertExpenseTag, removeExpenseTag } from '../services/products-service.js';
 import { getExpenseGroups, upsertExpenseGroup, removeExpenseGroup, getNextExpenseGroupColor } from '../services/expense-groups-service.js';
-import { hasDuplicateName } from '../services/branches-service.js';
+import { hasDuplicateName, getCustomBranches, getBranchById } from '../services/branches-service.js';
 import { getTransactions, saveTransaction, updateTransactionRecord } from '../services/transactions-service.js';
 import {
     UNGROUPED_ID,
@@ -284,6 +284,21 @@ export function resetSelectedExpenses() {
     if (totalSalesAmount) totalSalesAmount.readOnly = false;
 }
 
+// Sucursal opcional del gasto: "General" = sin sucursal (se reparte en la comparativa)
+function renderExpenseBranchOptions(selectedId = '') {
+    const select = document.getElementById('expense-branch');
+    if (!select) return;
+    select.innerHTML = '<option value="">General (todas las sucursales)</option>' +
+        getCustomBranches().map(branch => `<option value="${escapeHtml(branch.id)}">${escapeHtml(branch.name)}</option>`).join('');
+    select.value = getCustomBranches().some(branch => branch.id === selectedId) ? selectedId : '';
+}
+
+function readExpenseBranch() {
+    const branchId = document.getElementById('expense-branch')?.value || '';
+    const branch = branchId ? getBranchById(branchId) : null;
+    return branch ? { branchId: branch.id, zone: branch.name } : { branchId: null, zone: '' };
+}
+
 export function openExpenseModal(transaction = null) {
     const modal = document.getElementById('transaction-modal');
     const title = document.getElementById('transaction-modal-title');
@@ -297,6 +312,11 @@ export function openExpenseModal(transaction = null) {
     resetExpenseSearch();
     renderExpenseGroupSelects();
     resetSelectedExpenses();
+
+    const transactionBranch = transaction
+        ? (transaction.branchId || getCustomBranches().find(branch => branch.name === transaction.zone)?.id || '')
+        : '';
+    renderExpenseBranchOptions(transactionBranch);
 
     if (transaction) {
         editingTransactionId = transaction.id;
@@ -345,7 +365,7 @@ export async function handleExpenseFormSubmit(e, { onUpdate } = {}) {
                 amount: item.amount,
                 desc: item.name,
                 category: 'Gastos (General)',
-                zone: '',
+                ...readExpenseBranch(),
                 itemsSoldArray: [],
                 date: dateObj.toISOString(),
                 createdAt: new Date().toISOString()
@@ -370,7 +390,7 @@ export async function handleExpenseFormSubmit(e, { onUpdate } = {}) {
         amount,
         desc,
         category: 'Gastos (General)',
-        zone: '',
+        ...readExpenseBranch(),
         itemsSoldArray: [],
         date: dateObj.toISOString(),
         createdAt: new Date().toISOString()
