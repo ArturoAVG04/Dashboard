@@ -4,11 +4,11 @@ import { getCustomBranches, getStableBranchColor } from '../services/branches-se
 let charts = { main: null, category: null };
 
 const CHART_COLORS = {
-    income: '#10b981',
-    expense: '#ef4444',
-    grid: 'rgba(148, 163, 184, 0.12)',
-    text: '#9aa6b8',
-    empty: '#24324d'
+    income: '#30d158',
+    expense: '#ff453a',
+    grid: 'rgba(84, 84, 88, 0.35)',
+    text: '#98989f',
+    empty: '#2c2c2e'
 };
 
 const moneyTooltip = {
@@ -23,9 +23,9 @@ export function initCharts() {
     if (!mainChartEl || !catChartEl || typeof Chart === 'undefined') return;
 
     Chart.defaults.color = CHART_COLORS.text;
-    Chart.defaults.font.family = 'Inter';
-    Chart.defaults.plugins.tooltip.backgroundColor = '#0b1220';
-    Chart.defaults.plugins.tooltip.borderColor = 'rgba(148, 163, 184, 0.25)';
+    Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', sans-serif";
+    Chart.defaults.plugins.tooltip.backgroundColor = '#1c1c1e';
+    Chart.defaults.plugins.tooltip.borderColor = 'rgba(84, 84, 88, 0.6)';
     Chart.defaults.plugins.tooltip.borderWidth = 1;
     Chart.defaults.plugins.tooltip.padding = 10;
 

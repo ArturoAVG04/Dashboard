@@ -423,7 +423,7 @@ function renderHeatmap(report) {
                     ${order.map(day => {
                         const value = report.hourly[hour]?.[day] || 0;
                         const intensity = report.maxHourly > 0 ? value / report.maxHourly : 0;
-                        return `<span class="heatmap-cell" style="background: rgba(16, 185, 129, ${value ? (0.15 + intensity * 0.85).toFixed(2) : 0.04});" title="${WEEKDAY_LABELS[day]} ${String(hour).padStart(2, '0')}:00 · ${formatMoney(value)}"></span>`;
+                        return `<span class="heatmap-cell" style="background: rgba(48, 209, 88, ${value ? (0.15 + intensity * 0.85).toFixed(2) : 0.04});" title="${WEEKDAY_LABELS[day]} ${String(hour).padStart(2, '0')}:00 · ${formatMoney(value)}"></span>`;
                     }).join('')}
                 `).join('')}
             </div>

@@ -170,6 +170,8 @@ import {
     closeModifiersModal,
     updateModifiersModalTotal,
     confirmAddProductWithModifiers,
+    changeModifierQty,
+    setSalePaymentMethod,
     enforceModifierMaxSelect,
     addItemToCurrentSale,
     updateCurrentSaleItemQty,
@@ -557,6 +559,11 @@ function setupEventListeners() {
         }
     }));
 
+    document.getElementById('sale-payment-field')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-payment]');
+        if (btn) setSalePaymentMethod(btn.dataset.payment);
+    });
+
     const saleMobileSwitch = document.getElementById('sale-mobile-switch');
     if (saleMobileSwitch) {
         saleMobileSwitch.addEventListener('click', (e) => {
@@ -615,22 +622,8 @@ function setupEventListeners() {
     document.getElementById('modifiers-modal')?.addEventListener('click', (e) => {
         if (e.target.id === 'modifiers-modal') closeModifiersModal();
     });
-    document.getElementById('mod-qty-minus')?.addEventListener('click', () => {
-        const valEl = document.getElementById('mod-qty-val');
-        const currentQty = parseInt(valEl?.textContent || '1', 10);
-        if (currentQty > 1) {
-            const newQty = currentQty - 1;
-            if (valEl) valEl.textContent = String(newQty);
-            updateModifiersModalTotal();
-        }
-    });
-    document.getElementById('mod-qty-plus')?.addEventListener('click', () => {
-        const valEl = document.getElementById('mod-qty-val');
-        const currentQty = parseInt(valEl?.textContent || '1', 10);
-        const newQty = currentQty + 1;
-        if (valEl) valEl.textContent = String(newQty);
-        updateModifiersModalTotal();
-    });
+    document.getElementById('mod-qty-minus')?.addEventListener('click', () => changeModifierQty(-1));
+    document.getElementById('mod-qty-plus')?.addEventListener('click', () => changeModifierQty(1));
     document.getElementById('modifiers-modal-body')?.addEventListener('change', (e) => {
         enforceModifierMaxSelect(e.target);
         updateModifiersModalTotal();

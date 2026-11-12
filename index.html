@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Dashboard la Barra</title>
-    <meta name="theme-color" content="#0b1220">
+    <meta name="theme-color" content="#000000">
     <meta name="color-scheme" content="dark">
     <meta name="application-name" content="Dashboard la Barra">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -24,7 +24,7 @@
     <link rel="stylesheet" href="https://npmcdn.com/flatpickr/dist/themes/dark.css">
 
     <!-- Estilos propios -->
-    <link rel="stylesheet" href="css/styles.css?v=2.3.0">
+    <link rel="stylesheet" href="css/styles.css?v=2.4.0">
 
     <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
@@ -751,6 +751,14 @@
                             <span>Total</span>
                             <strong id="sale-total-display">$0.00</strong>
                         </div>
+                        <div class="sale-payment-field" id="sale-payment-field">
+                            <span class="field-label">¿Cómo pagó?</span>
+                            <div class="segmented segmented-fill" role="group" aria-label="Método de pago">
+                                <button type="button" class="segmented-btn active" data-payment="cash" aria-pressed="true"><i class="ph ph-money"></i> Efectivo</button>
+                                <button type="button" class="segmented-btn" data-payment="card" aria-pressed="false"><i class="ph ph-credit-card"></i> Tarjeta</button>
+                            </div>
+                            <div class="sale-card-fee" id="sale-card-fee" style="display: none;"></div>
+                        </div>
                         <div class="sale-actions">
                             <button type="button" class="btn btn-primary btn-lg btn-block" id="sale-primary-action"><i class="ph ph-check-circle"></i> Guardar venta</button>
                             <button type="button" class="btn btn-success btn-lg btn-block" id="sale-close-table-btn" style="display: none;"><i class="ph ph-currency-circle-dollar"></i> Cobrar mesa</button>
@@ -868,6 +876,6 @@
     <script src="https://npmcdn.com/flatpickr/dist/l10n/es.js"></script>
 
     <!-- App -->
-    <script type="module" src="js/app.js?v=2.3.0"></script>
+    <script type="module" src="js/app.js?v=2.4.0"></script>
 </body>
 </html>

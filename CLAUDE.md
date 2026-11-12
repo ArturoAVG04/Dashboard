@@ -1,5 +1,7 @@
 # CLAUDE.md — Dashboard La Barra
 
+> **Antes de trabajar:** lee y actualiza `AGENTS.md` (registro) y `/home/arturo/second-brain/log.md`.
+
 Contexto permanente para trabajar en este proyecto. Mantener actualizado al terminar cada fase.
 
 ## Qué es
@@ -118,6 +120,15 @@ Orden: F0 → F1 → F2 → F7a → F3 → F4 → F5 → F6 → F7b → F8
 - Vista Jornadas con pestañas: **Hoy** (tarjetas), **Cortes** (historial por semana) y **Semana** (reporte por sucursal).
 - Algoritmos en `js/analytics/forecast.js` (puros, con pruebas): demanda estimada si se agotó (curva de ventas de la jornada), recomendación = promedio ponderado de los mismos días de la semana + 0.5·desviación (sin margen si sobra > 30%), confianza por número de jornadas, etiquetas (Estrella, Se queda corto, Estable, Le cuesta salir, Faltan piezas) y textos de recomendación.
 - Sucursales con inventario: recomendación por artículo; sin inventario: por producto (cuánto preparar). "¿Qué llevas hoy?" usa la recomendación del día.
+
+### Pagos y caja (2026-11-12)
+- Toda venta (normal, mesa, edición) guarda `paymentMethod: 'cash'|'card'`; con tarjeta también `cardFee` (snapshot) y `cardFeeRate`. La terminal quita **4.06% por cobro** (3.5% + impuestos), `CARD_FEE_RATE` en `js/models/Payment.js`. Ventas viejas sin el campo se leen como efectivo (no se reescriben).
+- El método se elige en el pie del pedido (segmentado Efectivo/Tarjeta); se oculta al crear una mesa y se elige al cobrarla.
+- Ganancia neta en Principal = ventas − gastos − comisiones de tarjeta.
+- Jornada: `cashFloat` (cambio que se dejó; se pide en "¿Qué llevas hoy?"/Reabastecer y se puede corregir en el corte) y `cashCount` (efectivo contado, opcional). El corte guarda `summary.cash` = { float, cashSales, cardSales, cardFee, cardNet, expectedCash = cambio + efectivo, counted, difference }.
+
+### Diseño estilo iPhone (2026-11-12)
+- Tokens con la paleta de iOS en modo oscuro (fondo negro, tarjetas #1c1c1e, azul #0a84ff, verde #30d158), fuente del sistema (San Francisco en Apple, Inter en los demás), esquinas 10/14/20 px, campos rellenos con `--fill`, segmentado tipo iOS (`--fill-active`), barras translúcidas (`--glass`, `--glass-blur`), hojas inferiores con "jaladera". Colores de gráficas en `charts-ui.js` igualados.
 
 ### Glosario del dominio
 - **Artículo de inventario**: lo que se lleva físicamente (Burrito, Hamburguesa).

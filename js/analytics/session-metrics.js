@@ -1,5 +1,6 @@
 import { getSaleTimestamp } from '../core/date-utils.js';
 import { normalizeStockUsage } from '../models/Inventory.js';
+import { summarizePayments, computeExpectedCash } from '../models/Payment.js';
 
 // Métricas de una jornada (F5). Todo se calcula a partir de las ventas ligadas por sessionId,
 // así que editar o borrar una venta corrige automáticamente el inventario y el corte.
@@ -94,7 +95,7 @@ export function formatDuration(minutes) {
 
 // Resumen completo de la jornada (se guarda como snapshot al hacer el corte).
 // physicalCount: { itemId: piezas contadas al cierre }. Todo lo que sobra es merma (no pasa al día siguiente).
-export function computeSessionSummary(session, transactions, inventoryItems, { closedAt = null, physicalCount = null, now = new Date() } = {}) {
+export function computeSessionSummary(session, transactions, inventoryItems, { closedAt = null, physicalCount = null, now = new Date(), cashFloat, cashCount } = {}) {
     const openedAt = toDate(session?.openedAt) || now;
     const end = toDate(closedAt) || toDate(session?.closedAt) || now;
     const sales = getSessionSales(session, transactions);
@@ -102,6 +103,26 @@ export function computeSessionSummary(session, transactions, inventoryItems, { c
 
     const salesTotal = round(sales.reduce((sum, { tx }) => sum + (Number(tx.amount) || 0), 0), 2);
     const ticketCount = sales.length;
+
+    // Caja: efectivo vs tarjeta, comisión de la terminal y efectivo que debe haber (cambio + ventas en efectivo)
+    const payments = summarizePayments(sales.map(({ tx }) => tx));
+    const floatValue = cashFloat !== undefined ? cashFloat : session?.cashFloat;
+    const countValue = cashCount !== undefined ? cashCount : session?.cashCount;
+    const float = typeof floatValue === 'number' && Number.isFinite(floatValue) ? floatValue : null;
+    const counted = typeof countValue === 'number' && Number.isFinite(countValue) ? countValue : null;
+    const expectedCash = computeExpectedCash(float, payments.cash);
+    const cash = {
+        float,
+        cashSales: payments.cash,
+        cardSales: payments.card,
+        cardFee: payments.cardFee,
+        cardNet: payments.cardNet,
+        cashCount: payments.cashCount,
+        cardCount: payments.cardCount,
+        expectedCash,
+        counted,
+        difference: counted !== null ? round(counted - expectedCash, 2) : null
+    };
 
     const byHour = new Map();
     sales.forEach(({ tx, at }) => {
@@ -155,6 +176,7 @@ export function computeSessionSummary(session, transactions, inventoryItems, { c
         avgTicket: ticketCount > 0 ? round(salesTotal / ticketCount, 2) : 0,
         salesByHour,
         peakHour: peakHour ? peakHour.hour : null,
+        cash,
         items,
         totals: {
             loaded: totalLoaded,

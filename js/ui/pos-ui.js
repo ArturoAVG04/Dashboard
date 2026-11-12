@@ -13,6 +13,7 @@ import { saveTransaction, updateTransactionRecord, getTransactions } from '../se
 import { calculateItemsTotal } from '../models/Table.js';
 import { sortProductsForBranch } from '../models/Product.js';
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
+import { paymentFields, computeCardFee, getPaymentMethod, CARD_FEE_RATE } from '../models/Payment.js';
 
 let saleDraft = createEmptySaleDraft();
 let activeSaleContext = { mode: 'sale', tableId: null };
@@ -79,6 +80,7 @@ export function createEmptySaleDraft(overrides = {}) {
         branchId: '',
         items: [],
         total: 0,
+        paymentMethod: 'cash',
         ...overrides
     };
 }
@@ -296,6 +298,34 @@ export function updateSaleModalMeta() {
     }
 }
 
+// ---------- Método de pago (efectivo / tarjeta) ----------
+export function setSalePaymentMethod(method) {
+    saleDraft.paymentMethod = method === 'card' ? 'card' : 'cash';
+    renderSalePayment();
+}
+
+// Se oculta al crear una mesa (se elige al cobrarla)
+function renderSalePayment() {
+    const field = document.getElementById('sale-payment-field');
+    const feeRow = document.getElementById('sale-card-fee');
+    if (!field) return;
+    const branch = getBranchById(saleDraft.branchId);
+    const createsTable = activeSaleContext.mode === 'sale' && branch?.useTables;
+    field.style.display = createsTable ? 'none' : '';
+    field.querySelectorAll('[data-payment]').forEach(button => {
+        const active = button.dataset.payment === saleDraft.paymentMethod;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    if (!feeRow) return;
+    const isCard = !createsTable && saleDraft.paymentMethod === 'card';
+    feeRow.style.display = isCard ? 'flex' : 'none';
+    if (isCard) {
+        const fee = computeCardFee(saleDraft.total);
+        feeRow.innerHTML = `<span>Comisión terminal (${(CARD_FEE_RATE * 100).toFixed(2)}%)</span><span>−${formatMoney(fee)} · recibes <strong>${formatMoney(saleDraft.total - fee)}</strong></span>`;
+    }
+}
+
 export function renderSaleSummary() {
     const saleOrderItems = document.getElementById('sale-order-items');
     const saleItemsCount = document.getElementById('sale-items-count');
@@ -308,6 +338,7 @@ export function renderSaleSummary() {
     if (saleItemsCount) saleItemsCount.textContent = `${totalItems} producto${totalItems === 1 ? '' : 's'}`;
     if (saleTotalDisplay) saleTotalDisplay.textContent = formatMoney(saleDraft.total);
     if (saleTotalInput) saleTotalInput.value = saleDraft.total > 0 ? String(saleDraft.total) : '';
+    renderSalePayment();
 
     if (saleDraft.items.length === 0) {
         saleOrderItems.innerHTML = `<div class="empty-state empty-state-compact"><i class="ph ph-shopping-bag"></i><p>Todavía no agregas productos.</p><small>Toca un producto del menú para agregarlo.</small></div>`;
@@ -435,6 +466,15 @@ export function enforceModifierMaxSelect(input) {
         input.checked = false;
         showToast(`Máximo ${max} opción${max === 1 ? '' : 'es'} en este grupo`);
     }
+}
+
+// Botones − / + de la ventana de opciones: cambian cuántas piezas se agregan con la misma selección
+export function changeModifierQty(delta) {
+    if (!currentModProduct) return;
+    currentModQty = Math.max(1, currentModQty + delta);
+    const modQtyVal = document.getElementById('mod-qty-val');
+    if (modQtyVal) modQtyVal.textContent = String(currentModQty);
+    updateModifiersModalTotal();
 }
 
 export function closeModifiersModal() {
@@ -641,7 +681,7 @@ function stockConsumptionField(items, branchId) {
     return consumption.length > 0 ? { stockConsumption: consumption } : {};
 }
 
-export function buildIncomeTransaction({ branchId, items, total, source = 'sale', date = new Date(), soldAt = null, tableName = '', createdAt = null, sessionId = null }) {
+export function buildIncomeTransaction({ branchId, items, total, source = 'sale', date = new Date(), soldAt = null, tableName = '', createdAt = null, sessionId = null, paymentMethod = 'cash' }) {
     const branch = getBranchById(branchId);
     const customProducts = getCustomProducts();
     const desc = items.length > 0
@@ -672,6 +712,8 @@ export function buildIncomeTransaction({ branchId, items, total, source = 'sale'
         products: items.map(item => ({ ...item })),
         // Snapshot de lo que consumió del inventario (F4); si después cambia la receta, esta venta no cambia
         ...stockConsumptionField(items, branchId),
+        // Efectivo o tarjeta; con tarjeta se guarda la comisión de la terminal (4.06% por cobro)
+        ...paymentFields(paymentMethod, total),
         // Jornada a la que pertenece la venta (F5)
         ...(sessionId ? { sessionId } : {}),
         source,
@@ -772,7 +814,8 @@ export function openSaleEditor(transaction) {
     saleDraft = createEmptySaleDraft({
         branchId,
         items,
-        total: typeof transaction.amount === 'number' ? transaction.amount : calculateItemsTotal(items)
+        total: typeof transaction.amount === 'number' ? transaction.amount : calculateItemsTotal(items),
+        paymentMethod: getPaymentMethod(transaction)
     });
 
     const saleDateInput = document.getElementById('sale-date-input');
@@ -874,7 +917,8 @@ export async function handleSalePrimaryAction({ onUpdate, switchView } = {}) {
             soldAt: saleDateTime.soldAt,
             tableName: orig.tableName || '',
             sessionId: orig.sessionId || null,
-            createdAt: orig.createdAt || null
+            createdAt: orig.createdAt || null,
+            paymentMethod: saleDraft.paymentMethod
         });
 
         await updateTransactionRecord(transactionId, updatedTx);
@@ -920,12 +964,13 @@ export async function handleSalePrimaryAction({ onUpdate, switchView } = {}) {
         total: saleDraft.total,
         source: 'sale',
         ...saleDateTime,
-        sessionId: session?.id || null
+        sessionId: session?.id || null,
+        paymentMethod: saleDraft.paymentMethod
     });
 
     await saveTransaction(newTx);
     saveLocalState(STORAGE_KEYS.lastSaleBranch, branchId);
-    showToast("Venta guardada con éxito");
+    showToast(saleDraft.paymentMethod === 'card' ? "Venta con tarjeta guardada" : "Venta en efectivo guardada");
     closeSaleModal();
     if (typeof onUpdate === 'function') onUpdate();
 }
@@ -951,12 +996,13 @@ export async function handleCloseActiveTable({ onUpdate } = {}) {
         source: 'table',
         ...saleDateTime,
         tableName: table.name || '',
-        sessionId: session?.id || null
+        sessionId: session?.id || null,
+        paymentMethod: saleDraft.paymentMethod
     });
 
     await saveTransaction(transaction);
     deleteTable(tableId);
-    showToast(`${table.name} cobrada con éxito`);
+    showToast(`${table.name} cobrada${saleDraft.paymentMethod === 'card' ? ' con tarjeta' : ' en efectivo'}`);
     closeSaleModal();
     if (typeof onUpdate === 'function') onUpdate();
 }

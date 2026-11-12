@@ -29,6 +29,9 @@ export function sessionToDoc(session) {
         scheduledOpen: session.scheduledOpen || null,
         scheduledClose: session.scheduledClose || null,
         loads: Array.isArray(session.loads) ? session.loads : [],
+        // Cambio que se dejó en caja al abrir (null = no se anotó) y efectivo contado al corte
+        cashFloat: typeof session.cashFloat === 'number' ? session.cashFloat : null,
+        cashCount: typeof session.cashCount === 'number' ? session.cashCount : null,
         physicalCount: session.physicalCount || null,
         summary: session.summary || null,
         // Hora del último corte del día: desde ahí se reinicia la numeración de mesas
@@ -85,7 +88,7 @@ export async function saveSession(session) {
 }
 
 // Abre (o reabre) la jornada de hoy de una sucursal
-export async function openSession(branchId, { openedAt = new Date(), openSource = 'manual', loads = [] } = {}) {
+export async function openSession(branchId, { openedAt = new Date(), openSource = 'manual', loads = [], cashFloat } = {}) {
     const dateKey = getTodayKey(openedAt);
     const id = getSessionId(branchId, dateKey);
     const existing = getSessionById(id);
@@ -102,17 +105,18 @@ export async function openSession(branchId, { openedAt = new Date(), openSource 
         openSource: existing?.openSource || openSource,
         scheduledOpen: schedule?.open || null,
         scheduledClose: schedule?.close || null,
-        loads: [...(existing?.loads || []), ...loads]
+        loads: [...(existing?.loads || []), ...loads],
+        ...(typeof cashFloat === 'number' ? { cashFloat } : {})
     });
 }
 
-export async function addSessionLoads(sessionId, loads) {
+export async function addSessionLoads(sessionId, loads, { cashFloat } = {}) {
     const session = getSessionById(sessionId);
     if (!session) return null;
-    return saveSession({ ...session, loads: [...(session.loads || []), ...loads] });
+    return saveSession({ ...session, loads: [...(session.loads || []), ...loads], ...(typeof cashFloat === 'number' ? { cashFloat } : {}) });
 }
 
-export async function closeSession(sessionId, { closedAt = new Date(), closeSource = 'cut', physicalCount = null, summary = null } = {}) {
+export async function closeSession(sessionId, { closedAt = new Date(), closeSource = 'cut', physicalCount = null, summary = null, cashFloat, cashCount } = {}) {
     const session = getSessionById(sessionId);
     if (!session) return null;
     return saveSession({
@@ -122,6 +126,8 @@ export async function closeSession(sessionId, { closedAt = new Date(), closeSour
         closeSource,
         physicalCount,
         summary,
+        ...(cashFloat !== undefined ? { cashFloat } : {}),
+        ...(cashCount !== undefined ? { cashCount } : {}),
         lastCutAt: new Date().toISOString()
     });
 }

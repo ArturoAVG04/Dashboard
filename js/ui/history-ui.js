@@ -6,6 +6,7 @@ import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.
 import { formatExportDate } from './backup-ui.js';
 import { getTopSellerStats, getTopExpenseStats } from './dashboard-ui.js';
 import { getCustomProducts } from '../services/products-service.js';
+import { getTransactionCardFee } from '../models/Payment.js';
 
 let topSellersVisible = true;
 let topExpensesVisible = true;
@@ -113,12 +114,15 @@ export function createTransactionRow(t, showActions = true) {
 
     const badgeType = t.type === 'income' ? 'Venta' : 'Gasto';
     const sign = t.type === 'income' ? '+' : '-';
+    const paymentBadge = t.type === 'income' && t.paymentMethod === 'card'
+        ? `<small class="tx-pay is-card"><i class="ph ph-credit-card"></i> Tarjeta · comisión ${formatMoney(getTransactionCardFee(t))}</small>`
+        : t.type === 'income' && t.paymentMethod === 'cash' ? '<small class="tx-pay"><i class="ph ph-money"></i> Efectivo</small>' : '';
     const zoneBadge = t.zone ? `<small class="tx-zone"><i class="ph ph-map-pin"></i> ${escapeHtml(t.zone)}</small>` : '';
 
     tr.innerHTML = `
         <td class="tx-date" data-label="Fecha">${dateStr}${timeBadge}</td>
         <td class="tx-type" data-label="Tipo"><span class="badge ${t.type}">${badgeType}</span></td>
-        <td class="tx-desc" data-label="Descripción">${escapeHtml(t.desc)} ${zoneBadge}</td>
+        <td class="tx-desc" data-label="Descripción">${escapeHtml(t.desc)} ${zoneBadge}${paymentBadge}</td>
         <td class="tx-category" data-label="Categoría">${escapeHtml(t.category)}</td>
         <td class="align-right amount-cell ${t.type}" data-label="Monto">${sign}${formatMoney(t.amount)}</td>
         ${showActions ? `<td class="align-right tx-actions"><div class="history-actions"><button type="button" class="btn-icon" onclick="window.editTransaction('${t.id}')" title="Editar" aria-label="Editar"><i class="ph ph-pencil-simple"></i></button><button type="button" class="btn-icon btn-icon-danger" onclick="window.deleteTransaction('${t.id}')" title="Eliminar" aria-label="Eliminar"><i class="ph ph-trash"></i></button></div></td>` : ''}
@@ -143,6 +147,8 @@ export function getHistorySearchText(transaction) {
         transaction.desc,
         transaction.category,
         transaction.zone,
+        transaction.type === 'income' && transaction.paymentMethod === 'card' ? 'tarjeta' : '',
+        transaction.type === 'income' && transaction.paymentMethod === 'cash' ? 'efectivo' : '',
         amountText
     ].filter(Boolean).join(' '));
 }

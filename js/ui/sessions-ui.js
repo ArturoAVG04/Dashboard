@@ -125,6 +125,7 @@ function renderBranchSessionCard(branch, transactions, now) {
                 </div>
                 <p class="session-main">${formatMoney(summary.salesTotal)} <small>· ${summary.ticketCount} venta${summary.ticketCount === 1 ? '' : 's'}</small></p>
                 <p class="session-meta">Desde ${formatTimeDisplay(new Date(session.openedAt))} · ${formatDuration(summary.durationMinutes)}${session.openSource === 'auto-first-sale' ? ' · abierta con la primera venta' : ''}${session.openSource === 'schedule' ? ' · por horario' : ''}</p>
+                ${renderCashLine(summary.cash)}
                 ${needsLoad ? '<p class="session-warning"><i class="ph ph-warning"></i> Sin inventario cargado</p>' : ''}
                 ${stockChips ? `<div class="stock-chips">${stockChips}</div>` : ''}
                 <div class="session-actions">
@@ -263,6 +264,7 @@ export function openLoadModal(branchId, mode = 'open') {
         return;
     }
 
+    const currentFloat = typeof session?.cashFloat === 'number' ? session.cashFloat : null;
     const rows = items.map(item => {
         const suggested = suggestion?.totals.get(item.id);
         const current = stock.get(item.id);
@@ -291,6 +293,7 @@ export function openLoadModal(branchId, mode = 'open') {
         subtitle: `${branch?.name || ''} · ${mode === 'open' ? 'al guardar queda en servicio' : 'se suma a lo que ya llevas'}`,
         body: `
             ${suggestion ? `<div class="notice"><i class="ph ph-lightbulb"></i><span>${escapeHtml(suggestion.label)}. <button type="button" class="btn btn-ghost btn-sm" data-session-modal="suggest-all">Usar sugerencias</button></span></div>` : ''}
+            ${renderCashFloatField(branchId, mode === 'restock' ? currentFloat : null, mode)}
             <div class="load-list">${rows}</div>
             <div class="load-total">
                 <span>Venta esperada si se vende todo</span>
@@ -322,6 +325,68 @@ function updateLoadExpected() {
     if (totalCell) totalCell.textContent = formatMoney(total);
 }
 
+// ---------- Cambio en caja ----------
+// Último cambio anotado en esta sucursal (para sugerirlo)
+function getLastCashFloat(branchId) {
+    const last = getSessions()
+        .filter(session => session.branchId === branchId && typeof session.cashFloat === 'number' && session.cashFloat > 0)
+        .sort((a, b) => b.dateKey.localeCompare(a.dateKey))[0];
+    return last ? last.cashFloat : null;
+}
+
+function renderCashFloatField(branchId, currentFloat, mode) {
+    const hasFloat = typeof currentFloat === 'number' && currentFloat > 0;
+    const last = getLastCashFloat(branchId);
+    return `
+        <div class="cash-float-field" id="cash-float-field" data-mode="${hasFloat ? 'yes' : 'no'}">
+            <div class="cash-float-head">
+                <div>
+                    <strong><i class="ph ph-coins"></i> ¿Dejas cambio?</strong>
+                    <small>${mode === 'restock' ? 'Si se te olvidó anotarlo al abrir, ponlo aquí.' : 'Para que al corte sepas cuánto efectivo debe haber.'}</small>
+                </div>
+                <div class="segmented" role="group" aria-label="¿Dejas cambio?">
+                    <button type="button" class="segmented-btn${hasFloat ? '' : ' active'}" data-session-modal="float-no">No</button>
+                    <button type="button" class="segmented-btn${hasFloat ? ' active' : ''}" data-session-modal="float-yes">Sí</button>
+                </div>
+            </div>
+            <div class="cash-float-amount">
+                <label class="field-label" for="cash-float-input">¿Cuánto cambio dejas?</label>
+                <div class="input-prefix"><span>$</span><input type="number" id="cash-float-input" min="0" step="any" inputmode="decimal" placeholder="${last ? last : '0'}" value="${hasFloat ? currentFloat : ''}"></div>
+                ${last ? `<button type="button" class="suggest-chip" data-session-modal="float-last" data-amount="${last}">La última vez ${formatMoney(last)}</button>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+// undefined = no se cambió; 0 = sin cambio; número = cambio dejado; NaN = falta la cantidad
+function readCashFloat() {
+    const field = document.getElementById('cash-float-field');
+    if (!field) return undefined;
+    if (field.dataset.mode !== 'yes') return 0;
+    const value = parseFloat(document.getElementById('cash-float-input')?.value);
+    return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) / 100 : NaN;
+}
+
+function setCashFloatMode(mode) {
+    const field = document.getElementById('cash-float-field');
+    if (!field) return;
+    field.dataset.mode = mode;
+    field.querySelectorAll('[data-session-modal^="float-"]').forEach(button => {
+        if (button.dataset.sessionModal === 'float-yes' || button.dataset.sessionModal === 'float-no') {
+            button.classList.toggle('active', button.dataset.sessionModal === `float-${mode}`);
+        }
+    });
+    if (mode === 'yes') document.getElementById('cash-float-input')?.focus();
+}
+
+function renderCashLine(cash) {
+    if (!cash) return '';
+    const parts = [`Efectivo ${formatMoney(cash.cashSales)}`];
+    if (cash.cardSales > 0) parts.push(`Tarjeta ${formatMoney(cash.cardSales)}`);
+    parts.push(cash.float !== null ? `Cambio ${formatMoney(cash.float)}` : 'Sin cambio anotado');
+    return `<p class="session-meta session-cash"><i class="ph ph-coins"></i> ${parts.join(' · ')}</p>`;
+}
+
 function readLoads() {
     const now = new Date().toISOString();
     return [...document.querySelectorAll('#session-modal-body .load-qty')]
@@ -334,17 +399,23 @@ async function confirmLoad() {
     if (!modalState) return;
     const loads = readLoads();
     const { mode, branchId } = modalState;
-    if (loads.length === 0) {
+    const cashFloat = readCashFloat();
+    if (Number.isNaN(cashFloat)) {
+        showToast("Anota cuánto cambio dejas (o marca que no)");
+        return;
+    }
+    const active = getActiveSession(branchId);
+    const floatChanged = mode === 'restock' && active && cashFloat !== undefined && cashFloat !== (active.cashFloat ?? 0);
+    if (loads.length === 0 && !floatChanged) {
         showToast("Anota la cantidad de al menos un artículo");
         return;
     }
     const branchName = getBranchById(branchId)?.name || 'Sucursal';
-    const active = getActiveSession(branchId);
     if (mode === 'restock' && active) {
-        await addSessionLoads(active.id, loads);
-        showToast(`Inventario de ${branchName} actualizado`, 'success');
+        await addSessionLoads(active.id, loads, { cashFloat });
+        showToast(loads.length > 0 ? `Inventario de ${branchName} actualizado` : `Cambio de ${branchName} actualizado`, 'success');
     } else {
-        await openSession(branchId, { openSource: 'inventory', loads });
+        await openSession(branchId, { openSource: 'inventory', loads, cashFloat });
         showToast(`${branchName} en servicio`, 'success');
     }
     closeSessionModal();
@@ -422,6 +493,9 @@ export function openCutModal(sessionId, { readOnly = false } = {}) {
         </div>
     ` : (config.inventoryEnabled ? '<div class="notice notice-warning"><i class="ph ph-info"></i><span>No se cargó inventario en esta jornada.</span></div>' : '');
 
+    const cash = summary.cash || computeSessionSummary(session, transactions, getInventoryItems(), { closedAt: defaultClose }).cash;
+    const cashSection = renderCutCashSection(cash, readOnly);
+
     const closeTimeField = readOnly ? '' : `
         <div class="form-row">
             <div class="form-group">
@@ -439,6 +513,7 @@ export function openCutModal(sessionId, { readOnly = false } = {}) {
             ${openTables.length > 0 && !readOnly ? `<div class="notice notice-warning"><i class="ph ph-warning"></i><span>Hay ${openTables.length} mesa(s) abierta(s) sin cobrar en esta sucursal. Cóbralas antes del corte para que cuenten.</span></div>` : ''}
             ${stats}
             ${closeTimeField}
+            ${cashSection}
             ${items}
             ${hours}
         `,
@@ -448,6 +523,60 @@ export function openCutModal(sessionId, { readOnly = false } = {}) {
             : `<button type="button" class="btn btn-ghost" data-session-modal="close">Cancelar</button>
                <button type="button" class="btn btn-primary btn-lg session-primary" data-session-modal="confirm-cut"><i class="ph ph-scissors"></i> Confirmar corte</button>`
     });
+}
+
+// Caja del corte: cambio + ventas en efectivo = efectivo esperado; tarjeta con su comisión aparte
+function renderCutCashSection(cash, readOnly) {
+    if (!cash) return '';
+    const floatCell = readOnly
+        ? `<strong>${cash.float !== null ? formatMoney(cash.float) : 'No se anotó'}</strong>`
+        : `<div class="input-prefix input-compact"><span>$</span><input type="number" id="cut-cash-float" min="0" step="any" inputmode="decimal" placeholder="0" value="${cash.float ?? ''}" aria-label="Cambio que se dejó"></div>`;
+    const countCell = readOnly
+        ? `<strong>${cash.counted !== null ? formatMoney(cash.counted) : '—'}</strong>`
+        : `<div class="input-prefix input-compact"><span>$</span><input type="number" id="cut-cash-count" min="0" step="any" inputmode="decimal" placeholder="Opcional" value="${cash.counted ?? ''}" aria-label="Efectivo contado"></div>`;
+    return `
+        <div class="cut-section">
+            <h4>Caja</h4>
+            <div class="cash-list" id="cut-cash" data-cash-sales="${cash.cashSales}">
+                <div class="cash-row"><span>Cambio que dejaste</span>${floatCell}</div>
+                <div class="cash-row"><span>Ventas en efectivo <small>(${cash.cashCount})</small></span><strong>${formatMoney(cash.cashSales)}</strong></div>
+                <div class="cash-row cash-row-total"><span>Efectivo que debe haber</span><strong id="cut-expected-cash">${formatMoney(cash.expectedCash)}</strong></div>
+                <div class="cash-row"><span>Efectivo contado</span>${countCell}</div>
+                <div class="cash-row" id="cut-cash-diff-row"${cash.difference === null ? ' hidden' : ''}><span>Diferencia</span><strong id="cut-cash-diff">${renderCashDifference(cash.difference)}</strong></div>
+                ${cash.cardCount > 0 ? `
+                <div class="cash-row cash-row-sep"><span>Ventas con tarjeta <small>(${cash.cardCount})</small></span><strong>${formatMoney(cash.cardSales)}</strong></div>
+                <div class="cash-row"><span>Comisión terminal (4.06%)</span><strong class="text-danger">−${formatMoney(cash.cardFee)}</strong></div>
+                <div class="cash-row"><span>Te deposita la terminal</span><strong>${formatMoney(cash.cardNet)}</strong></div>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+function renderCashDifference(difference) {
+    if (difference === null || difference === undefined) return '';
+    if (Math.abs(difference) < 0.005) return '<span class="text-success">Cuadra</span>';
+    return difference > 0
+        ? `<span class="text-warning">Sobran ${formatMoney(difference)}</span>`
+        : `<span class="text-danger">Faltan ${formatMoney(Math.abs(difference))}</span>`;
+}
+
+function readMoneyInput(id) {
+    const input = document.getElementById(id);
+    if (!input || input.value === '') return null;
+    const value = parseFloat(input.value);
+    return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) / 100 : null;
+}
+
+function updateCutCash() {
+    const box = document.getElementById('cut-cash');
+    if (!box) return;
+    const expected = (readMoneyInput('cut-cash-float') || 0) + (Number(box.dataset.cashSales) || 0);
+    const counted = readMoneyInput('cut-cash-count');
+    document.getElementById('cut-expected-cash').textContent = formatMoney(expected);
+    const diffRow = document.getElementById('cut-cash-diff-row');
+    if (diffRow) diffRow.hidden = counted === null;
+    const diffCell = document.getElementById('cut-cash-diff');
+    if (diffCell) diffCell.innerHTML = counted === null ? '' : renderCashDifference(Math.round((counted - expected) * 100) / 100);
 }
 
 function renderCutResult(counted, expected, unitCost) {
@@ -463,6 +592,10 @@ function renderCutResult(counted, expected, unitCost) {
 export function handleSessionModalInput(event) {
     if (event.target.closest('.load-qty')) {
         updateLoadExpected();
+        return;
+    }
+    if (event.target.id === 'cut-cash-float' || event.target.id === 'cut-cash-count') {
+        updateCutCash();
         return;
     }
     const input = event.target.closest('.cut-count');
@@ -496,12 +629,16 @@ async function confirmCut() {
         }
     }
     const isToday = session.dateKey === getTodayKeyLocal();
-    const summary = computeSessionSummary(session, getTransactions(), getInventoryItems(), { closedAt, physicalCount });
+    const cashFloat = readMoneyInput('cut-cash-float');
+    const cashCount = readMoneyInput('cut-cash-count');
+    const summary = computeSessionSummary(session, getTransactions(), getInventoryItems(), { closedAt, physicalCount, cashFloat, cashCount });
     await closeSession(session.id, {
         closedAt,
         closeSource: isToday ? 'cut' : 'estimated',
         physicalCount: Object.keys(physicalCount).length > 0 ? physicalCount : null,
-        summary
+        summary,
+        cashFloat,
+        cashCount
     });
     showToast(`Corte de ${getBranchById(session.branchId)?.name || 'la sucursal'} guardado`, 'success');
     closeSessionModal();
@@ -525,6 +662,13 @@ export async function handleSessionModalClick(event) {
             if (input && !input.value) input.value = chip.dataset.qty;
         });
         updateLoadExpected();
+    }
+    if (action === 'float-yes') setCashFloatMode('yes');
+    if (action === 'float-no') setCashFloatMode('no');
+    if (action === 'float-last') {
+        setCashFloatMode('yes');
+        const input = document.getElementById('cash-float-input');
+        if (input) input.value = button.dataset.amount;
     }
     if (action === 'confirm-load') await confirmLoad();
     if (action === 'confirm-cut') await confirmCut();

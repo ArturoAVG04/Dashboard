@@ -1,6 +1,7 @@
 import { formatMoney, normalizeText, toTitleCase, escapeHtml } from '../core/date-utils.js';
 import { createTransactionRow } from './history-ui.js';
 import { getCustomBranches, getStableBranchColor } from '../services/branches-service.js';
+import { summarizePayments } from '../models/Payment.js';
 
 export function updateDashboardSummaryCards(transactions) {
     const summaryIncome = document.getElementById('summary-income');
@@ -23,7 +24,9 @@ export function updateDashboardSummaryCards(transactions) {
         }
     });
 
-    const profit = totalIncome - totalExpense;
+    // Comisión de la terminal: se resta de la ganancia (es dinero que no llega)
+    const payments = summarizePayments(transactions);
+    const profit = totalIncome - totalExpense - payments.cardFee;
     if (summaryIncome) summaryIncome.textContent = formatMoney(totalIncome);
     if (summaryExpense) summaryExpense.textContent = formatMoney(totalExpense);
     if (summaryProfit) {
@@ -33,13 +36,13 @@ export function updateDashboardSummaryCards(transactions) {
     }
 
     setMeta('summary-income-meta', incomeCount > 0
-        ? `${incomeCount} venta${incomeCount === 1 ? '' : 's'} · ticket promedio ${formatMoney(totalIncome / incomeCount)}`
+        ? `${incomeCount} venta${incomeCount === 1 ? '' : 's'} · ticket promedio ${formatMoney(totalIncome / incomeCount)} · efectivo ${formatMoney(payments.cash)}${payments.card > 0 ? ` · tarjeta ${formatMoney(payments.card)}` : ''}`
         : 'Sin ventas en este periodo');
     setMeta('summary-expense-meta', expenseCount > 0
         ? `${expenseCount} gasto${expenseCount === 1 ? '' : 's'} registrado${expenseCount === 1 ? '' : 's'}`
         : 'Sin gastos en este periodo');
     setMeta('summary-profit-meta', totalIncome > 0
-        ? `Margen ${Math.round((profit / totalIncome) * 100)}% sobre ventas`
+        ? `Margen ${Math.round((profit / totalIncome) * 100)}% sobre ventas${payments.cardFee > 0 ? ` · comisión de tarjeta −${formatMoney(payments.cardFee)}` : ''}`
         : '—');
 }
 
