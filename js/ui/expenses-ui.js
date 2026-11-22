@@ -4,6 +4,8 @@ import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.
 import { getCustomExpenseTags, upsertExpenseTag, removeExpenseTag } from '../services/products-service.js';
 import { getExpenseGroups, upsertExpenseGroup, removeExpenseGroup, getNextExpenseGroupColor } from '../services/expense-groups-service.js';
 import { hasDuplicateName, getCustomBranches, getBranchById } from '../services/branches-service.js';
+import { getSessions, getTodayKey } from '../services/sessions-service.js';
+import { pickDefaultExpenseBranch, expenseGroupNameForTag } from '../models/ExpenseDefaults.js';
 import { getTransactions, saveTransaction, updateTransactionRecord } from '../services/transactions-service.js';
 import {
     UNGROUPED_ID,
@@ -293,9 +295,17 @@ function renderExpenseBranchOptions(selectedId = '') {
     select.value = getCustomBranches().some(branch => branch.id === selectedId) ? selectedId : '';
 }
 
+function defaultExpenseBranch() {
+    return pickDefaultExpenseBranch({
+        sessions: getSessions(), todayKey: getTodayKey(), branches: getCustomBranches(),
+        lastBranchId: loadLocalState(STORAGE_KEYS.lastExpenseBranch, '')
+    });
+}
+
 function readExpenseBranch() {
     const branchId = document.getElementById('expense-branch')?.value || '';
     const branch = branchId ? getBranchById(branchId) : null;
+    saveLocalState(STORAGE_KEYS.lastExpenseBranch, branch ? branch.id : '');
     return branch ? { branchId: branch.id, zone: branch.name } : { branchId: null, zone: '' };
 }
 
@@ -315,7 +325,7 @@ export function openExpenseModal(transaction = null) {
 
     const transactionBranch = transaction
         ? (transaction.branchId || getCustomBranches().find(branch => branch.name === transaction.zone)?.id || '')
-        : '';
+        : defaultExpenseBranch();
     renderExpenseBranchOptions(transactionBranch);
 
     if (transaction) {
@@ -339,6 +349,12 @@ export function closeModal() {
     editingTransactionId = null;
     resetExpenseSearch();
     resetSelectedExpenses();
+}
+
+// Nombre del grupo del atajo como categoría de análisis (solo si tiene grupo)
+function expenseGroupField(tagName) {
+    const expenseGroup = expenseGroupNameForTag(tagName, getCustomExpenseTags(), getExpenseGroups());
+    return expenseGroup ? { expenseGroup } : {};
 }
 
 let expenseSaving = false;
@@ -381,6 +397,7 @@ async function saveExpenseForm({ onUpdate } = {}) {
                 amount: item.amount,
                 desc: item.name,
                 category: 'Gastos (General)',
+                ...expenseGroupField(item.name),
                 ...readExpenseBranch(),
                 itemsSoldArray: [],
                 date: dateObj.toISOString(),

@@ -10,7 +10,7 @@ export const ANALYSIS_FORMAT = 'labarra-analisis';
 export const ANALYSIS_VERSION = 1;
 export const CSV_COLUMNS = ['tipo', 'fecha', 'hora', 'hora_estimada', 'dia_semana', 'sucursal', 'sucursal_id', 'ticket_id',
     'jornada_id', 'producto', 'producto_id', 'opciones', 'cantidad', 'precio_unitario', 'importe', 'metodo_pago',
-    'comision_tarjeta', 'origen', 'categoria', 'descripcion'];
+    'comision_tarjeta', 'origen', 'categoria', 'categoria_gasto', 'descripcion'];
 
 const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
 const pad = (value) => String(value).padStart(2, '0');
@@ -63,7 +63,7 @@ export function expenseRow(tx, branchOf) {
     if (!when) return null;
     const branch = branchOf(tx);
     return { tipo: 'gasto', fecha: when.fecha, hora: when.hora, dia_semana: mondayWeekday(when.fecha), sucursal: branch.name,
-        sucursal_id: branch.id, importe: round2(tx.amount), categoria: tx.category || '', descripcion: tx.desc || '' };
+        sucursal_id: branch.id, importe: round2(tx.amount), categoria: tx.category || '', categoria_gasto: tx.expenseGroup || '', descripcion: tx.desc || '' };
 }
 
 function sessionInfo(sessions, branchOf) {

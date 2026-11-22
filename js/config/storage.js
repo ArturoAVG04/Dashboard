@@ -7,6 +7,7 @@ export const STORAGE_KEYS = {
     openTables: 'openTables',
     lastBranch: 'lastSelectedBranch',
     lastSaleBranch: 'lastSaleBranch',
+    lastExpenseBranch: 'lastExpenseBranch',
     sessionsTab: 'sessionsTab',
     historyPeriod: 'historyPeriod',
     comparisonSort: 'comparisonSort',

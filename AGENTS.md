@@ -61,3 +61,7 @@ Punto de venta y finanzas de La Barra: ventas, gastos, mesas, productos, inventa
 - En el corte hay chips "Normal / Lluvia / Se acabó / Otro" → `session.earlyClose` (se corrige en el corte guardado). Archivos: `js/models/EarlyClose.js`, `js/ui/early-close-ui.js`. La exportación para análisis agrega la columna `cierre_temprano`; el análisis en Python excluye esos días al ajustar el modelo.
 - Nota de calendario ("Sin clases · Quincena…", "Probablemente no abres") en "Cuánto llevar" y en "¿Qué llevas hoy?" (`js/ui/calendar-note.js`). Las cantidades no cambian.
 - Pendiente: tratar "agotado" como demanda censurada (piso) en lugar de excluirlo; mostrar el nombre del evento. Visual sin probar en el navegador.
+
+### 2026-11-22 · Gastos: sucursal por defecto y categoría — Claude (agente)
+- Un gasto nuevo preselecciona la sucursal de la única jornada abierta hoy o, si no, la última usada (localStorage `lastExpenseBranch`). Los atajos guardan `expenseGroup` (nombre del grupo). La exportación agrega `categoria_gasto`. Lógica pura en `js/models/ExpenseDefaults.js` y pruebas.
+- Los gastos viejos se asignan a una sucursal SOLO en el análisis de Python (`second-brain/herramientas/ventas`), sin tocar Firestore.
