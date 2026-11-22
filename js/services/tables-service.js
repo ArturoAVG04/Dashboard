@@ -1,5 +1,5 @@
 import { db } from '../config/firebase-config.js';
-import { collection, onSnapshot, query, orderBy, doc, addDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
+import { collection, onSnapshot, query, orderBy, doc, setDoc, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 import { STORAGE_KEYS, loadLocalState, saveLocalState } from '../config/storage.js';
 import { isSameLocalDate } from '../core/date-utils.js';
 import { normalizeOpenTables, calculateItemsTotal, Table, countTodayTables, nextTableName } from '../models/Table.js';
@@ -30,8 +30,10 @@ export function getNextTableName(branchId, transactions = [], since = null) {
 
 export function createTable(branchId, initialItems = [], initialTotal = 0, transactions = [], since = null) {
     const tableName = getNextTableName(branchId, transactions, since);
+    // Con Firebase el id se genera antes de guardar: así las ediciones inmediatas de la mesa también llegan a la nube
+    const tableRef = db ? doc(collection(db, "dashboard_tables")) : null;
     const newTable = new Table({
-        id: `table_${Date.now()}`,
+        id: tableRef ? tableRef.id : `table_${Date.now()}`,
         branchId: branchId || '',
         name: tableName,
         items: initialItems,
@@ -43,17 +45,14 @@ export function createTable(branchId, initialItems = [], initialTotal = 0, trans
     openTables = [newTable, ...openTables];
     saveLocalState(STORAGE_KEYS.openTables, openTables);
 
-    if (db) {
-        addDoc(collection(db, "dashboard_tables"), {
+    if (tableRef) {
+        setDoc(tableRef, {
             branchId: newTable.branchId,
             name: newTable.name,
             items: newTable.items,
             total: newTable.total,
             status: newTable.status,
             createdAt: newTable.createdAt
-        }).then(docRef => {
-            newTable.id = docRef.id;
-            saveLocalState(STORAGE_KEYS.openTables, openTables);
         }).catch(err => {
             console.warn("Error guardando mesa en Firebase:", err);
         });

@@ -32,3 +32,27 @@ Punto de venta y finanzas de La Barra: ventas, gastos, mesas, productos, inventa
 - Aprendido: `node --check a.js b.js` solo revisa el primer archivo; hay que recorrerlos uno por uno.
 - Pendiente: la comparativa de sucursales todavía no resta comisiones de tarjeta; modo claro (si lo quiere).
 
+- Publicado a producción (main, commit 2ee4952) el 2026-11-12 a pedido de Arturo.
+
+### 2026-11-21 · Bugs + exportación para análisis + calendario de ventas — Claude (con 2 agentes)
+- **Bugs corregidos:**
+  - Doble toque duplicaba ventas, cobros de mesa, gastos, cargas y cortes (ahora hay candados).
+  - El total editable borraba el punto decimal.
+  - Al editar una venta quedaban `soldAt` y `stockConsumption` viejos: ahora se recalcula el consumo.
+  - Una jornada nocturna con cierre después de medianoche no dejaba hacer el corte (`resolveCloseAfterOpen`, tope de 16 h).
+  - Venta offline duplicada en memoria e id temporal que podía chocar.
+  - La mesa nueva no sincronizaba ediciones inmediatas (ahora el id se genera antes con `setDoc`).
+  - XSS en `<option>` de categorías y sucursales.
+  - `escapeHtml(0)` devolvía vacío.
+  - El rango personalizado de un solo día se ignoraba.
+- **Nuevo:**
+  - Tarjeta **"Para análisis"** en Respaldos: JSON o CSV plano (`js/analytics/analysis-export.js`).
+  - `forecast.js` acepta un calendario (`sales-calendar.js`, más `sales-calendar-data.js`, que genera el script de Python con `--js`). Solo ajusta cantidades si la validación lo aprueba; hoy no ajusta nada.
+- **Análisis en Python:** `~/second-brain/herramientas/ventas/` (`analizar_ventas.py`). Hallazgos en `second-brain/03-la-barra/VENTAS-2026.md`.
+- **Pendientes y notas:**
+  - El login trae la contraseña en el JS cliente (decisión de Arturo).
+  - Las ventas después de medianoche no se ligan a la jornada.
+  - `RECENT_CUTOFF` se fija al cargar el módulo.
+  - Editar un gasto reescribe `createdAt`.
+  - `sw.js` tiene rutas viejas, pero `app.js` desregistra todos los service workers a propósito, así que no afecta.
+- Pruebas: 89 JS y 16 Python.

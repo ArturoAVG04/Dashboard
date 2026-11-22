@@ -341,8 +341,24 @@ export function closeModal() {
     resetSelectedExpenses();
 }
 
-export async function handleExpenseFormSubmit(e, { onUpdate } = {}) {
+let expenseSaving = false;
+
+// Evita doble envío (doble toque) mientras se guarda
+export async function handleExpenseFormSubmit(e, options = {}) {
     e.preventDefault();
+    if (expenseSaving) return;
+    expenseSaving = true;
+    try {
+        await saveExpenseForm(options);
+    } catch (error) {
+        console.warn('No se pudo guardar el gasto:', error);
+        showToast('No se pudo guardar. Intenta de nuevo.');
+    } finally {
+        expenseSaving = false;
+    }
+}
+
+async function saveExpenseForm({ onUpdate } = {}) {
     const amountInput = document.getElementById('amount');
     const dateInput = document.getElementById('date');
     const descInput = document.getElementById('description');

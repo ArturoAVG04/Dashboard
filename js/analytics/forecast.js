@@ -1,4 +1,5 @@
 import { getSessionSales, computeSessionSummary } from './session-metrics.js';
+import { adjustSamplesForCalendar, describeSalesDay, nextDateForWeekday } from './sales-calendar.js';
 
 // Métricas semanales y recomendaciones (F6). Todo con reglas y estadística simple, sin IA.
 
@@ -147,8 +148,22 @@ export function getBranchClosedSessions(sessions, branchId, { beforeDateKey = nu
         .sort((a, b) => b.dateKey.localeCompare(a.dateKey));
 }
 
+// Día al que se refiere la recomendación: el próximo con ese día de la semana (hoy incluido)
+export function resolveTargetDateKey(weekday, { targetDateKey = null, beforeDateKey = null, now = new Date() } = {}) {
+    return targetDateKey || nextDateForWeekday(beforeDateKey || toDateKey(now), weekday);
+}
+
+// Recomendación con calendario (clases UG, puente, quincena): ajusta lo vendido en días distintos
+// al día objetivo con factores validados; si no hay factores, la cantidad queda igual.
+function recommendWithCalendar(rows, branchId, targetDateKey, calendarOptions) {
+    const adjusted = adjustSamplesForCalendar(rows, branchId, targetDateKey, calendarOptions);
+    const recommendation = recommendQuantity(adjusted);
+    return recommendation ? { ...recommendation, calendar: describeSalesDay(branchId, targetDateKey, calendarOptions) } : null;
+}
+
 // Recomendación por artículo para un día de la semana
-export function buildItemRecommendations(sessions, transactions, branchId, inventoryItems, weekday, { beforeDateKey = null, limit = 8 } = {}) {
+export function buildItemRecommendations(sessions, transactions, branchId, inventoryItems, weekday, { beforeDateKey = null, limit = 8, targetDateKey = null, calendarOptions = {} } = {}) {
+    const target = resolveTargetDateKey(weekday, { targetDateKey, beforeDateKey });
     const closed = getBranchClosedSessions(sessions, branchId, { beforeDateKey }).slice(0, 40);
     const curve = buildSalesCurve(closed.slice(0, 12), transactions);
 
@@ -169,7 +184,7 @@ export function buildItemRecommendations(sessions, transactions, branchId, inven
         const sameDay = rows.filter(row => weekdayOf(row.dateKey) === weekday).slice(0, limit);
         const basis = sameDay.length >= WEEKDAY_MIN_SAMPLES ? 'weekday' : 'all';
         const used = basis === 'weekday' ? sameDay : (sameDay.length > 0 ? [...sameDay, ...rows.filter(row => weekdayOf(row.dateKey) !== weekday)] : rows).slice(0, limit);
-        const recommendation = recommendQuantity(used);
+        const recommendation = recommendWithCalendar(used, branchId, target, calendarOptions);
         if (!recommendation) return null;
         return {
             itemId: item.id,
@@ -207,7 +222,8 @@ export function productTotalsForSessions(sessionList, transactions) {
 }
 
 // Recomendación por producto (sucursales sin inventario: cuánto preparar)
-export function buildProductRecommendations(sessions, transactions, branchId, weekday, { beforeDateKey = null, limit = 8, top = 12 } = {}) {
+export function buildProductRecommendations(sessions, transactions, branchId, weekday, { beforeDateKey = null, limit = 8, top = 12, targetDateKey = null, calendarOptions = {} } = {}) {
+    const target = resolveTargetDateKey(weekday, { targetDateKey, beforeDateKey });
     const closed = getBranchClosedSessions(sessions, branchId, { beforeDateKey }).slice(0, 40);
     const perSession = closed.map(session => ({ session, totals: productTotalsForSessions([session], transactions) }));
     const allProducts = new Map();
@@ -224,7 +240,7 @@ export function buildProductRecommendations(sessions, transactions, branchId, we
             const rows = perSession.map(({ session, totals }) => ({ dateKey: session.dateKey, demand: totals.get(key)?.qty || 0, loaded: 0, leftover: 0 }));
             const sameDay = rows.filter(row => weekdayOf(row.dateKey) === weekday).slice(0, limit);
             const basis = sameDay.length >= WEEKDAY_MIN_SAMPLES ? 'weekday' : 'all';
-            const recommendation = recommendQuantity(basis === 'weekday' ? sameDay : rows.slice(0, limit));
+            const recommendation = recommendWithCalendar(basis === 'weekday' ? sameDay : rows.slice(0, limit), branchId, target, calendarOptions);
             return recommendation ? { key, name: info.name, ...recommendation, basis, confidence: confidenceLevel(sameDay.length, basis) } : null;
         })
         .filter(Boolean);

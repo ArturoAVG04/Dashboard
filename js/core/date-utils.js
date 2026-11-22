@@ -16,7 +16,7 @@ export function isSameLocalDate(dateA, dateB = new Date()) {
 }
 
 export function escapeHtml(str) {
-    if (!str) return '';
+    if (str === null || str === undefined || str === false) return '';
     return String(str)
         .replace(/&/g, '&amp;')
         .replace(/"/g, '&quot;')

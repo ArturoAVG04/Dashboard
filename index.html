@@ -389,6 +389,15 @@
                         <p>Copia de <strong>toda</strong> la base de datos: ventas, gastos, productos, categorías, sucursales, mesas y atajos. Solo lee, no modifica nada.</p>
                         <button id="btn-export-full-backup" class="btn btn-warning btn-block" type="button"><i class="ph ph-download-simple"></i> Descargar respaldo</button>
                     </article>
+                    <article class="panel backup-card">
+                        <div class="backup-icon backup-icon-primary"><i class="ph ph-chart-line-up"></i></div>
+                        <h3>Para análisis</h3>
+                        <p>Todo el historial en tablas: una fila por producto vendido y una por día. Para Excel o una IA.</p>
+                        <div class="backup-actions">
+                            <button id="btn-export-analysis-json" class="btn btn-primary btn-block" type="button"><i class="ph ph-download-simple"></i> JSON</button>
+                            <button id="btn-export-analysis-csv" class="btn btn-secondary btn-block" type="button"><i class="ph ph-microsoft-excel-logo"></i> Excel (CSV)</button>
+                        </div>
+                    </article>
                 </div>
             </div>
 

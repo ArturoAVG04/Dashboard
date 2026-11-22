@@ -23,7 +23,8 @@ import {
     computeSoldOutTimes,
     estimateCloseTime,
     formatDuration,
-    computeItemSalesHistory
+    computeItemSalesHistory,
+    resolveCloseAfterOpen
 } from '../analytics/session-metrics.js';
 import { buildItemRecommendations } from '../analytics/forecast.js';
 
@@ -620,13 +621,10 @@ async function confirmCut() {
     const timeValue = document.getElementById('cut-close-time')?.value;
     let closedAt = combineLocalDateAndTime(session.dateKey, timeValue) || new Date();
     const openedAt = new Date(session.openedAt);
-    if (closedAt < openedAt) {
-        // El campo de hora no tiene segundos: en el mismo minuto de la apertura se toma la apertura
-        if (openedAt - closedAt < 60000) closedAt = new Date(Math.max(openedAt.getTime(), Math.min(Date.now(), openedAt.getTime() + 59000)));
-        else {
-            showToast("La hora de cierre no puede ser antes de la apertura");
-            return;
-        }
+    closedAt = resolveCloseAfterOpen(closedAt, openedAt);
+    if (!closedAt) {
+        showToast("La hora de cierre no puede ser antes de la apertura");
+        return;
     }
     const isToday = session.dateKey === getTodayKeyLocal();
     const cashFloat = readMoneyInput('cut-cash-float');
@@ -644,6 +642,8 @@ async function confirmCut() {
     closeSessionModal();
     notifyChange();
 }
+
+let sessionActionBusy = false;
 
 export async function handleSessionModalClick(event) {
     const button = event.target.closest('[data-session-modal]');
@@ -670,8 +670,16 @@ export async function handleSessionModalClick(event) {
         const input = document.getElementById('cash-float-input');
         if (input) input.value = button.dataset.amount;
     }
-    if (action === 'confirm-load') await confirmLoad();
-    if (action === 'confirm-cut') await confirmCut();
+    if (action === 'confirm-load' || action === 'confirm-cut') {
+        // Evita doble envío (doble toque): duplicaría la carga de inventario o el corte
+        if (sessionActionBusy) return;
+        sessionActionBusy = true;
+        try {
+            await (action === 'confirm-load' ? confirmLoad() : confirmCut());
+        } finally {
+            sessionActionBusy = false;
+        }
+    }
     if (action === 'reopen') {
         const session = getSessionById(modalState?.sessionId);
         if (!session) return;

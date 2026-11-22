@@ -115,7 +115,7 @@ export function loadFullHistory() {
 
 export async function saveTransaction(newTx) {
     if (!db) {
-        const localTx = { ...newTx, id: `temp_${Date.now()}` };
+        const localTx = { ...newTx, id: `temp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}` };
         transactions = [localTx, ...transactions];
         persist();
         return localTx;
@@ -149,19 +149,27 @@ export async function deleteTransactionRecord(id) {
     persist();
 }
 
+let syncingOffline = false;
 export function syncStrandedOfflineTransactions() {
-    if (!db) return;
+    if (!db || syncingOffline) return;
     const tempTxs = transactions.filter(isTemp);
     if (tempTxs.length === 0) return;
 
-    tempTxs.forEach(async (tempTx) => {
+    syncingOffline = true;
+    const uploads = tempTxs.map(async (tempTx) => {
         try {
             const { id, ...dataToUpload } = tempTx;
             const docRef = await addDoc(collection(db, "transactions"), dataToUpload);
-            transactions = transactions.map(t => t.id === tempTx.id ? { ...dataToUpload, id: docRef.id } : t);
+            // Si el listener de Firestore ya trajo el documento nuevo, solo se quita el temporal (evita duplicados)
+            const alreadyLoaded = transactions.some(t => t.id === docRef.id);
+            transactions = alreadyLoaded
+                ? transactions.filter(t => t.id !== tempTx.id)
+                : transactions.map(t => t.id === tempTx.id ? { ...dataToUpload, id: docRef.id } : t);
+            notify();
             persist();
         } catch (e) {
             console.warn("Fallo re-sincronización offline:", e);
         }
     });
+    Promise.all(uploads).finally(() => { syncingOffline = false; });
 }

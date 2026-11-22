@@ -42,7 +42,8 @@ import {
 import {
     downloadCSV,
     downloadImageSummary,
-    downloadFullBackup
+    downloadFullBackup,
+    downloadAnalysisExport
 } from './ui/backup-ui.js';
 import {
     updateDashboardSummaryCards,
@@ -431,9 +432,10 @@ function setupEventListeners() {
             dateFormat: "Y-m-d",
             locale: "es",
             onClose: (selectedDates) => {
-                if (selectedDates.length === 2) {
+                if (selectedDates.length >= 1) {
+                    // Un solo día elegido = rango de ese día
                     customStartDate = selectedDates[0];
-                    customEndDate = selectedDates[1];
+                    customEndDate = selectedDates[1] || selectedDates[0];
                     currentFilter = 'custom';
                     ensureHistoryFrom(customStartDate);
                     filterBtns.forEach(b => b.classList.remove('active'));
@@ -848,6 +850,8 @@ function setupEventListeners() {
     document.getElementById('btn-export-full-backup')?.addEventListener('click', (e) => {
         downloadFullBackup(showToast, e.currentTarget);
     });
+    document.getElementById('btn-export-analysis-json')?.addEventListener('click', (e) => downloadAnalysisExport(showToast, e.currentTarget, 'json'));
+    document.getElementById('btn-export-analysis-csv')?.addEventListener('click', (e) => downloadAnalysisExport(showToast, e.currentTarget, 'csv'));
     document.getElementById('btn-export-csv')?.addEventListener('click', () => {
         downloadCSV(getFilteredData(), currentFilter, showToast);
     });

@@ -337,7 +337,8 @@ export function renderSaleSummary() {
     const totalItems = saleDraft.items.reduce((sum, item) => sum + item.qty, 0);
     if (saleItemsCount) saleItemsCount.textContent = `${totalItems} producto${totalItems === 1 ? '' : 's'}`;
     if (saleTotalDisplay) saleTotalDisplay.textContent = formatMoney(saleDraft.total);
-    if (saleTotalInput) saleTotalInput.value = saleDraft.total > 0 ? String(saleDraft.total) : '';
+    // No pisar el campo mientras se escribe (borraba el punto decimal y no dejaba vaciar el campo)
+    if (saleTotalInput && document.activeElement !== saleTotalInput) saleTotalInput.value = saleDraft.total > 0 ? String(saleDraft.total) : '';
     renderSalePayment();
 
     if (saleDraft.items.length === 0) {
@@ -884,7 +885,30 @@ export function handleSaleBranchChange() {
     setSaleMobilePanel('menu');
 }
 
-export async function handleSalePrimaryAction({ onUpdate, switchView } = {}) {
+// Evita doble envío (doble toque) mientras se guarda
+let saleSaving = false;
+async function withSaleLock(task) {
+    if (saleSaving) return;
+    saleSaving = true;
+    try {
+        await task();
+    } catch (error) {
+        console.warn('No se pudo guardar la venta:', error);
+        showToast('No se pudo guardar. Intenta de nuevo.');
+    } finally {
+        saleSaving = false;
+    }
+}
+
+export function handleSalePrimaryAction(options = {}) {
+    return withSaleLock(() => saveSalePrimaryAction(options));
+}
+
+export function handleCloseActiveTable(options = {}) {
+    return withSaleLock(() => chargeActiveTable(options));
+}
+
+async function saveSalePrimaryAction({ onUpdate, switchView } = {}) {
     const saleBranchSelect = document.getElementById('sale-branch-select');
     const saleDateInput = document.getElementById('sale-date-input');
     const customBranches = getCustomBranches();
@@ -921,7 +945,13 @@ export async function handleSalePrimaryAction({ onUpdate, switchView } = {}) {
             paymentMethod: saleDraft.paymentMethod
         });
 
-        await updateTransactionRecord(transactionId, updatedTx);
+        // updateDoc mezcla campos: lo que ya no aplica se limpia y el consumo de inventario se recalcula con los productos editados
+        await updateTransactionRecord(transactionId, {
+            soldAt: null,
+            stockConsumption: [],
+            ...stockConsumptionField(saleDraft.items, branchId),
+            ...updatedTx
+        });
         showToast("Venta actualizada con éxito");
         closeSaleModal();
         if (typeof onUpdate === 'function') onUpdate();
@@ -975,7 +1005,7 @@ export async function handleSalePrimaryAction({ onUpdate, switchView } = {}) {
     if (typeof onUpdate === 'function') onUpdate();
 }
 
-export async function handleCloseActiveTable({ onUpdate } = {}) {
+async function chargeActiveTable({ onUpdate } = {}) {
     if (activeSaleContext.mode !== 'table' || !activeSaleContext.tableId) return;
     const tableId = activeSaleContext.tableId;
     const openTables = getOpenTables();

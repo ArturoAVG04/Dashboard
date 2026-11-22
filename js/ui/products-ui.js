@@ -246,7 +246,7 @@ export function renderCategoryOptions() {
     const customCategories = getCustomCategories();
 
     if (manageCategoryInput) {
-        manageCategoryInput.innerHTML = customCategories.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+        manageCategoryInput.innerHTML = customCategories.map(c => `<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join('');
     }
 }
 
@@ -286,7 +286,7 @@ export function renderManageProducts() {
         const lastBranch = localStorage.getItem(STORAGE_KEYS.lastBranch) || '';
         
         productsBranchSelect.innerHTML = '<option value="">Todas las sucursales</option>' +
-            customBranches.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+            customBranches.map(b => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`).join('');
 
         if (currentVal && Array.from(productsBranchSelect.options).some(o => o.value === currentVal)) {
             productsBranchSelect.value = currentVal;

@@ -1,5 +1,6 @@
 import { formatMoney, getSaleTimestamp, formatTimeDisplay } from '../core/date-utils.js';
 import { buildFullBackup } from '../services/backup-service.js';
+import { buildAnalysisExport, analysisInputFromBackup, analysisToCSV } from '../analytics/analysis-export.js';
 
 export function formatExportDate(dateValue) {
     if (!dateValue) return 'Sin fecha';
@@ -211,6 +212,26 @@ export async function downloadFullBackup(notify, button = null) {
     } catch (error) {
         console.error("Error generando respaldo completo:", error);
         notify?.("No se pudo generar el respaldo completo");
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+// Datos "para análisis" (todo el historial): JSON con tablas planas o CSV para Excel. Solo lectura.
+export async function downloadAnalysisExport(notify, button = null, format = 'json') {
+    if (button) button.disabled = true;
+    notify?.("Preparando datos para análisis...");
+    try {
+        const analysis = buildAnalysisExport(analysisInputFromBackup(await buildFullBackup()));
+        const stamp = new Date().toISOString().slice(0, 10);
+        const blob = format === 'csv'
+            ? new Blob([analysisToCSV(analysis)], { type: 'text/csv;charset=utf-8;' })
+            : new Blob([JSON.stringify(analysis, null, 1)], { type: 'application/json' });
+        triggerDownload(blob, `Analisis_LaBarra_${stamp}.${format === 'csv' ? 'csv' : 'json'}`);
+        notify?.(`Listo: ${analysis.ventas.length} productos vendidos en ${analysis.dias.length} días`);
+    } catch (error) {
+        console.error("Error generando datos para análisis:", error);
+        notify?.("No se pudieron preparar los datos");
     } finally {
         if (button) button.disabled = false;
     }

@@ -209,3 +209,16 @@ export function computeItemSalesHistory(sessions, branchId, itemId, { weekday = 
         weekdaySamples: sameDay.length
     };
 }
+
+// Hora de cierre válida respecto a la apertura (el campo de hora no tiene segundos ni fecha).
+// - Mismo minuto de la apertura: se toma la apertura (hasta +59 s, sin pasar de `now`).
+// - Hora menor que la apertura: se entiende como después de medianoche (día siguiente), jornada máxima de 16 h.
+// Devuelve null si no es válida.
+export function resolveCloseAfterOpen(closedAt, openedAt, now = new Date()) {
+    if (closedAt >= openedAt) return closedAt;
+    if (openedAt - closedAt < 60000) {
+        return new Date(Math.max(openedAt.getTime(), Math.min(now.getTime(), openedAt.getTime() + 59000)));
+    }
+    const nextDay = new Date(closedAt.getTime() + 24 * 3600000);
+    return nextDay - openedAt <= 16 * 3600000 ? nextDay : null;
+}
