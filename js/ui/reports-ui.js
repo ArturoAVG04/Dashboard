@@ -20,6 +20,7 @@ import {
     getBranchClosedSessions,
     generateInsights
 } from '../analytics/forecast.js';
+import { renderCalendarNote } from './calendar-note.js';
 import { openCutModal, renderSessionsSection } from './sessions-ui.js';
 
 const CUTS_PAGE = 20;
@@ -298,6 +299,7 @@ function renderRecommendations(recommendations, config, days) {
         return `
             <div class="reco-day">
                 <h4>${WEEKDAY_LABELS[weekday]}</h4>
+                ${renderCalendarNote(list.find(entry => entry.calendar)?.calendar)}
                 <ul>
                     ${list.map(entry => `
                         <li>

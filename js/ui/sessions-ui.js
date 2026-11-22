@@ -14,7 +14,8 @@ import {
     openSession,
     addSessionLoads,
     closeSession,
-    reopenSession
+    reopenSession,
+    setSessionEarlyClose
 } from '../services/sessions-service.js';
 import { getBranchSessionConfig, getScheduleForDate } from '../models/BranchConfig.js';
 import {
@@ -27,6 +28,8 @@ import {
     resolveCloseAfterOpen
 } from '../analytics/session-metrics.js';
 import { buildItemRecommendations } from '../analytics/forecast.js';
+import { renderEarlyCloseRow, selectEarlyChip, readEarlyClose } from './early-close-ui.js';
+import { renderCalendarNote } from './calendar-note.js';
 
 let modalState = null; // { mode: 'open'|'restock'|'cut'|'view', branchId, sessionId }
 let onChangeCallback = null;
@@ -225,7 +228,8 @@ function getLoadSuggestion(branchId) {
         return {
             totals: new Map(recommendations.map(entry => [entry.itemId, entry.qty])),
             label: `Recomendado para hoy según tus jornadas anteriores (confianza ${confidence})`,
-            chip: 'Recomendado'
+            chip: 'Recomendado',
+            calendar: recommendations.find(entry => entry.calendar)?.calendar || null
         };
     }
 
@@ -294,6 +298,7 @@ export function openLoadModal(branchId, mode = 'open') {
         subtitle: `${branch?.name || ''} · ${mode === 'open' ? 'al guardar queda en servicio' : 'se suma a lo que ya llevas'}`,
         body: `
             ${suggestion ? `<div class="notice"><i class="ph ph-lightbulb"></i><span>${escapeHtml(suggestion.label)}. <button type="button" class="btn btn-ghost btn-sm" data-session-modal="suggest-all">Usar sugerencias</button></span></div>` : ''}
+            ${renderCalendarNote(suggestion?.calendar)}
             ${renderCashFloatField(branchId, mode === 'restock' ? currentFloat : null, mode)}
             <div class="load-list">${rows}</div>
             <div class="load-total">
@@ -514,6 +519,7 @@ export function openCutModal(sessionId, { readOnly = false } = {}) {
             ${openTables.length > 0 && !readOnly ? `<div class="notice notice-warning"><i class="ph ph-warning"></i><span>Hay ${openTables.length} mesa(s) abierta(s) sin cobrar en esta sucursal. Cóbralas antes del corte para que cuenten.</span></div>` : ''}
             ${stats}
             ${closeTimeField}
+            ${renderEarlyCloseRow(session.earlyClose)}
             ${cashSection}
             ${items}
             ${hours}
@@ -636,7 +642,8 @@ async function confirmCut() {
         physicalCount: Object.keys(physicalCount).length > 0 ? physicalCount : null,
         summary,
         cashFloat,
-        cashCount
+        cashCount,
+        earlyClose: readEarlyClose()
     });
     showToast(`Corte de ${getBranchById(session.branchId)?.name || 'la sucursal'} guardado`, 'success');
     closeSessionModal();
@@ -662,6 +669,14 @@ export async function handleSessionModalClick(event) {
             if (input && !input.value) input.value = chip.dataset.qty;
         });
         updateLoadExpected();
+    }
+    if (action === 'early-close') {
+        const value = selectEarlyChip(button);
+        if (modalState?.mode === 'view') {
+            await setSessionEarlyClose(modalState.sessionId, value);
+            showToast('Cierre actualizado', 'success');
+            notifyChange();
+        }
     }
     if (action === 'float-yes') setCashFloatMode('yes');
     if (action === 'float-no') setCashFloatMode('no');

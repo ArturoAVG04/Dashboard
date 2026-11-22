@@ -56,3 +56,8 @@ Punto de venta y finanzas de La Barra: ventas, gastos, mesas, productos, inventa
   - Editar un gasto reescribe `createdAt`.
   - `sw.js` tiene rutas viejas, pero `app.js` desregistra todos los service workers a propósito, así que no afecta.
 - Pruebas: 89 JS y 16 Python.
+
+### 2026-11-22 · "¿Cerraste temprano?" y nota de calendario — Claude (agente)
+- En el corte hay chips "Normal / Lluvia / Se acabó / Otro" → `session.earlyClose` (se corrige en el corte guardado). Archivos: `js/models/EarlyClose.js`, `js/ui/early-close-ui.js`. La exportación para análisis agrega la columna `cierre_temprano`; el análisis en Python excluye esos días al ajustar el modelo.
+- Nota de calendario ("Sin clases · Quincena…", "Probablemente no abres") en "Cuánto llevar" y en "¿Qué llevas hoy?" (`js/ui/calendar-note.js`). Las cantidades no cambian.
+- Pendiente: tratar "agotado" como demanda censurada (piso) en lugar de excluirlo; mostrar el nombre del evento. Visual sin probar en el navegador.

@@ -5,6 +5,7 @@ import { getLocalDateInputValue } from '../core/date-utils.js';
 import { getBranchById } from './branches-service.js';
 import { getBranchSessionConfig, getScheduleForDate } from '../models/BranchConfig.js';
 import { getTransactions } from './transactions-service.js';
+import { normalizeEarlyClose } from '../models/EarlyClose.js';
 import { computeSessionStock } from '../analytics/session-metrics.js';
 
 // Colección nueva (F5): una jornada por sucursal y día. El id es determinista
@@ -34,6 +35,7 @@ export function sessionToDoc(session) {
         cashCount: typeof session.cashCount === 'number' ? session.cashCount : null,
         physicalCount: session.physicalCount || null,
         summary: session.summary || null,
+        earlyClose: normalizeEarlyClose(session.earlyClose),
         // Hora del último corte del día: desde ahí se reinicia la numeración de mesas
         lastCutAt: session.lastCutAt || null,
         updatedAt: new Date().toISOString()
@@ -116,7 +118,7 @@ export async function addSessionLoads(sessionId, loads, { cashFloat } = {}) {
     return saveSession({ ...session, loads: [...(session.loads || []), ...loads], ...(typeof cashFloat === 'number' ? { cashFloat } : {}) });
 }
 
-export async function closeSession(sessionId, { closedAt = new Date(), closeSource = 'cut', physicalCount = null, summary = null, cashFloat, cashCount } = {}) {
+export async function closeSession(sessionId, { closedAt = new Date(), closeSource = 'cut', physicalCount = null, summary = null, cashFloat, cashCount, earlyClose } = {}) {
     const session = getSessionById(sessionId);
     if (!session) return null;
     return saveSession({
@@ -128,8 +130,15 @@ export async function closeSession(sessionId, { closedAt = new Date(), closeSour
         summary,
         ...(cashFloat !== undefined ? { cashFloat } : {}),
         ...(cashCount !== undefined ? { cashCount } : {}),
+        ...(earlyClose !== undefined ? { earlyClose: normalizeEarlyClose(earlyClose) } : {}),
         lastCutAt: new Date().toISOString()
     });
+}
+
+// Corrige "¿Cerraste temprano?" de un corte ya guardado
+export async function setSessionEarlyClose(sessionId, earlyClose) {
+    const session = getSessionById(sessionId);
+    return session ? saveSession({ ...session, earlyClose: normalizeEarlyClose(earlyClose) }) : null;
 }
 
 export async function reopenSession(sessionId) {

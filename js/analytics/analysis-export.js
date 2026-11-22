@@ -1,4 +1,5 @@
 import { getSaleTimestamp, getLocalDateInputValue } from '../core/date-utils.js';
+import { normalizeEarlyClose } from '../models/EarlyClose.js';
 import { getPaymentMethod, getTransactionCardFee } from '../models/Payment.js';
 
 // Exportación "para análisis": tablas planas listas para Excel, Python o una IA.
@@ -72,7 +73,8 @@ function sessionInfo(sessions, branchOf) {
         const summary = session.summary || {};
         byKey.set(`${session.dateKey}|${branch.name}`, {
             minutos_servicio: summary.durationMinutes ?? null, hora_apertura: session.openedAt || '', hora_cierre: session.closedAt || '',
-            costo_sobrante: summary.totals?.wasteCost ?? null, articulos_agotados: (summary.items || []).filter(item => item.soldOutAt).length
+            costo_sobrante: summary.totals?.wasteCost ?? null, articulos_agotados: (summary.items || []).filter(item => item.soldOutAt).length,
+            cierre_temprano: normalizeEarlyClose(session.earlyClose) || ''
         });
     });
     return byKey;
@@ -99,7 +101,7 @@ export function buildDayRows(sales, expenses, sessions, branchOf) {
     return [...days.entries()].map(([key, day]) => ({
         ...day, tickets: day.tickets.size, ingresos: round2(day.ingresos), gastos: round2(day.gastos), comision_tarjeta: round2(day.comision_tarjeta),
         utilidad: round2(day.ingresos - day.gastos - day.comision_tarjeta),
-        minutos_servicio: null, hora_apertura: '', hora_cierre: '', costo_sobrante: null, articulos_agotados: null, ...(info.get(key) || {})
+        minutos_servicio: null, hora_apertura: '', hora_cierre: '', costo_sobrante: null, articulos_agotados: null, cierre_temprano: '', ...(info.get(key) || {})
     })).sort((a, b) => a.fecha.localeCompare(b.fecha) || a.sucursal.localeCompare(b.sucursal));
 }
 
